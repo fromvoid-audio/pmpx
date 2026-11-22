@@ -256,6 +256,9 @@ fn encode_phase_metadata(payload: &mut Vec<u8>, curve: &EditableCurve) {
     if curve.high_resolution {
         payload.extend_from_slice(&HIGH_RESOLUTION_METADATA_MAGIC.to_le_bytes());
     }
+    if curve.smooth_bezier {
+        payload.extend_from_slice(&BEZIER_METADATA_MAGIC.to_le_bytes());
+    }
 }
 
 fn decode_global_curve_slot_payload(payload: &[u8]) -> Result<Vec<GlobalCurveSlot>, String> {
@@ -314,7 +317,7 @@ fn decode_curve(
     node_count: usize,
     with_phase_metadata: bool,
     with_origin_metadata: bool,
-    with_high_resolution_metadata: bool,
+    with_capture_metadata: bool,
 ) -> Result<EditableCurve, String> {
     if !(2..=MAX_EDITABLE_NODES).contains(&node_count) {
         return Err("invalid node count bounds".to_string());
@@ -369,7 +372,10 @@ fn decode_curve(
                 ORIGIN_METADATA_MAGIC if with_origin_metadata => {
                     curve.origin_is_clip = true;
                 }
-                HIGH_RESOLUTION_METADATA_MAGIC if with_high_resolution_metadata => {
+                BEZIER_METADATA_MAGIC if with_capture_metadata => {
+                    curve.smooth_bezier = true;
+                }
+                HIGH_RESOLUTION_METADATA_MAGIC if with_capture_metadata => {
                     curve.high_resolution = true;
                 }
                 _ => {
@@ -428,10 +434,9 @@ mod tests {
     #[test]
     fn captured_curve_precision_survives_global_slot_storage() {
         let mut slots = empty_global_curve_slots();
-        let curve = crate::curve::cyclically_offset_editable_curve(
-            &crate::curve::precise_test_curve(),
-            0.3,
-        );
+        let mut captured = crate::curve::precise_test_curve();
+        captured.smooth_bezier = true;
+        let curve = crate::curve::cyclically_offset_editable_curve(&captured, 0.3);
         slots[0].curve = Some(curve);
         let payload = encode_global_curve_slot_payload(&slots);
         assert_eq!(decode_global_curve_slot_payload(&payload).unwrap(), slots);

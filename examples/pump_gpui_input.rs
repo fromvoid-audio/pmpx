@@ -848,7 +848,10 @@ mod macos {
             0.0,
             "a completed capture must turn compression off"
         );
-        assert!((params.editable_curve_snapshot().nodes[0].y - 0.5).abs() < 0.001);
+        let captured = params.editable_curve_snapshot();
+        assert!(captured.smooth_bezier);
+        assert!((captured.nodes[0].y - 0.5).abs() < 0.001);
+        capture_frame(&gui, "captured Bézier envelope");
         send_key(app, fixture.window, &gui, "z", 6, COMMAND);
         assert_eq!(
             params.editable_curve_snapshot(),

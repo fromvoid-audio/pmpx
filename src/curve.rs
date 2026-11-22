@@ -60,6 +60,8 @@ pub struct EditableCurve {
     pub origin_is_clip: bool,
     /// Preserve additional playback detail for curves generated from audio captures.
     pub high_resolution: bool,
+    /// Use shape-preserving cubic Bézier segments with shared node tangents.
+    pub smooth_bezier: bool,
 }
 
 impl Default for EditableCurve {
@@ -71,6 +73,7 @@ impl Default for EditableCurve {
             phase_offset: 0.0,
             origin_is_clip: false,
             high_resolution: false,
+            smooth_bezier: false,
         }
     }
 }
@@ -94,6 +97,7 @@ impl EditableCurve {
         );
         if let Some(source) = self.phase_source.as_mut() {
             source.high_resolution |= self.high_resolution;
+            source.smooth_bezier |= self.smooth_bezier;
             source.normalize_in_place();
         }
         if self.origin_is_clip && self.nodes.len() < 3 {
@@ -186,6 +190,7 @@ pub fn cyclically_offset_editable_curve(curve: &EditableCurve, delta: f32) -> Ed
         phase_offset: exact_phase_offset(&origin, delta),
         origin_is_clip: origin.origin_is_clip,
         high_resolution: origin.high_resolution,
+        smooth_bezier: origin.smooth_bezier,
     };
     for window in offset.nodes.windows(2) {
         let left = window[0].x;
@@ -289,6 +294,7 @@ fn exact_phase_source(curve: &EditableCurve) -> EditableCurve {
             segments: curve.segments.clone(),
             origin_is_clip: curve.origin_is_clip,
             high_resolution: curve.high_resolution,
+            smooth_bezier: curve.smooth_bezier,
             ..EditableCurve::default()
         })
 }
@@ -384,6 +390,10 @@ pub fn sample_editable_curve(curve: &EditableCurve, phase: f32) -> f32 {
             } else {
                 wrapped
             };
+            if curve.smooth_bezier {
+                return bezier_edge(curve, curve.nodes.len() - 2, closure_tension)
+                    .sample(closure_x);
+            }
             return sample_curve_segment(last_interior, closure_right, closure_tension, closure_x);
         }
     }
@@ -423,7 +433,11 @@ fn refresh_origin_clip_endpoints(curve: &mut EditableCurve) {
         x: first_interior.x + 1.0,
         y: first_interior.y,
     };
-    let y = sample_curve_segment(last_interior, closure_right, closure_tension, 1.0);
+    let y = if curve.smooth_bezier {
+        bezier_edge(curve, last_index - 1, closure_tension).sample(1.0)
+    } else {
+        sample_curve_segment(last_interior, closure_right, closure_tension, 1.0)
+    };
     curve.nodes[0].y = y;
     curve.nodes[last_index].y = y;
     // Keep the two split edge segments canonical. Any interior tensions remain
@@ -464,17 +478,119 @@ pub fn curve_table_to_editable(curve: &[f32; CURVE_TABLE_LEN]) -> EditableCurve 
 fn sample_segment(curve: &EditableCurve, segment_index: usize, x: f32) -> f32 {
     let left = curve.nodes[segment_index];
     let right = curve.nodes[(segment_index + 1).min(curve.nodes.len() - 1)];
-    sample_curve_segment(
-        left,
-        right,
-        curve
-            .segments
-            .get(segment_index)
-            .copied()
-            .unwrap_or(CurveSegment { tension: 0.0 })
-            .tension,
-        x,
-    )
+    let tension = curve
+        .segments
+        .get(segment_index)
+        .map_or(0.0, |segment| segment.tension);
+    if curve.smooth_bezier {
+        return bezier_edge(curve, segment_index, tension).sample(x);
+    }
+    sample_curve_segment(left, right, tension, x)
+}
+
+pub(crate) fn bezier_edge(curve: &EditableCurve, index: usize, tension: f32) -> CubicBezier {
+    let nodes = &curve.nodes;
+    let end = nodes.len() - 1;
+    let first = usize::from(curve.origin_is_clip);
+    let last = end - 1;
+    let shift = |index: usize, cycles: f32| CurveNode {
+        x: nodes[index].x + cycles,
+        y: nodes[index].y,
+    };
+    let left = nodes[index];
+    let previous = if index == first {
+        shift(last, -1.0)
+    } else {
+        nodes[index - 1]
+    };
+    let (right, next) = if index == last {
+        let next = if first == last {
+            shift(first, 2.0)
+        } else {
+            shift(first + 1, 1.0)
+        };
+        (shift(first, 1.0), next)
+    } else if index + 1 == last {
+        (nodes[last], shift(first, 1.0))
+    } else {
+        (nodes[index + 1], nodes[index + 2])
+    };
+    CubicBezier::between(Some(previous), left, right, Some(next), tension)
+}
+
+/// A cubic with monotone x and gain bounded by its endpoints.
+#[derive(Clone, Copy)]
+pub(crate) struct CubicBezier {
+    pub(crate) start: CurveNode,
+    pub(crate) control_a: CurveNode,
+    pub(crate) control_b: CurveNode,
+    pub(crate) end: CurveNode,
+    time_bias: f32,
+}
+
+impl CubicBezier {
+    pub(crate) fn between(
+        previous: Option<CurveNode>,
+        start: CurveNode,
+        end: CurveNode,
+        next: Option<CurveNode>,
+        tension: f32,
+    ) -> Self {
+        let span = end.x - start.x;
+        let time_bias = tension.clamp(-1.0, 1.0) / 6.0;
+        let start_handle = span * (1.0 / 3.0 + time_bias);
+        let end_handle = span * (1.0 / 3.0 - time_bias);
+        Self {
+            start,
+            control_a: CurveNode {
+                x: start.x + start_handle,
+                y: start.y
+                    + start_handle * previous.map_or(0.0, |previous| tangent(previous, start, end)),
+            },
+            control_b: CurveNode {
+                x: end.x - end_handle,
+                y: end.y - end_handle * next.map_or(0.0, |next| tangent(start, end, next)),
+            },
+            end,
+            time_bias,
+        }
+    }
+
+    pub(crate) fn sample(self, x: f32) -> f32 {
+        let phase = ((x - self.start.x) / (self.end.x - self.start.x)).clamp(0.0, 1.0);
+        let t = if self.time_bias == 0.0 || phase == 0.0 || phase == 1.0 {
+            phase
+        } else {
+            // Invert x(t) = t + bias * t * (1 - t) without cancellation.
+            let bias = 3.0 * self.time_bias;
+            let linear = 1.0 + bias;
+            2.0 * phase / (linear + (linear * linear - 4.0 * bias * phase).sqrt())
+        };
+        let inverse = 1.0 - t;
+        let gain = inverse * inverse * (inverse * self.start.y + 3.0 * t * self.control_a.y)
+            + t * t * (3.0 * inverse * self.control_b.y + t * self.end.y);
+        gain.clamp(self.start.y.min(self.end.y), self.start.y.max(self.end.y))
+    }
+}
+
+/// Weighted harmonic slope at a node. Turning points are flat and the
+/// shared tangent fits inside either neighboring edge even at full tension.
+fn tangent(previous: CurveNode, node: CurveNode, next: CurveNode) -> f32 {
+    let left_width = node.x - previous.x;
+    let right_width = next.x - node.x;
+    if left_width <= 0.0 || right_width <= 0.0 {
+        return 0.0;
+    }
+    let left = (node.y - previous.y) / left_width;
+    let right = (next.y - node.y) / right_width;
+    if left * right <= 0.0 {
+        return 0.0;
+    }
+    let left_weight = left_width + 2.0 * right_width;
+    let right_weight = 2.0 * left_width + right_width;
+    let slope = (left_weight + right_weight) / (left_weight / left + right_weight / right);
+    let limit = 2.0 * left.abs().min(right.abs());
+    slope.clamp(-limit, limit)
 }
 
 /// Sample one editable curve edge using its node endpoints and tension.

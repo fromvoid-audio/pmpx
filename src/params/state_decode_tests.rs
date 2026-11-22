@@ -1106,8 +1106,9 @@ fn v22_state_defaults_compressor_on_both_sounds_and_presets() {
 #[test]
 fn captured_curve_precision_survives_project_and_sound_snapshots() {
     let source = PumpParams::new();
-    let curve =
-        crate::curve::cyclically_offset_editable_curve(&crate::curve::precise_test_curve(), 0.3);
+    let mut captured = crate::curve::precise_test_curve();
+    captured.smooth_bezier = true;
+    let curve = crate::curve::cyclically_offset_editable_curve(&captured, 0.3);
     source.set_editable_curve_preserving_phase(&curve);
     assert!(source.store_active_sound_state());
     let mut bank = source.preset_bank_snapshot();
@@ -1117,7 +1118,7 @@ fn captured_curve_precision_survives_project_and_sound_snapshots() {
     let payload = encode_current_state_payload(&source);
     let restored = PumpParams::new();
     decode_state_payload(&restored, &payload).unwrap();
-    assert!(restored.editable_curve_snapshot().high_resolution);
+    assert_eq!(restored.editable_curve_snapshot(), curve);
     assert!(
         (crate::curve::sample_editable_curve(&restored.editable_curve_snapshot(), 0.50003) - 0.1)
             .abs()

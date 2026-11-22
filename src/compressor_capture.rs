@@ -345,34 +345,51 @@ impl CaptureExchange {
     }
 }
 
-/// Fit captured linear gain to editable piecewise-linear curve segments.
-/// This runs off the audio thread: fitting allocates and can inspect every point.
-pub(crate) fn editable_curve_from_capture(points: &[f32]) -> crate::curve::EditableCurve {
-    use crate::curve::{CurveNode, CurveSegment, EditableCurve, MAX_EDITABLE_NODES};
-    const FIT_ERROR: f32 = 0.005;
+const BEZIER_FIT_ERROR: f32 = 0.005;
 
-    let clipped_seam = (points[0] - points[CAPTURE_POINTS - 1]).abs() > FIT_ERROR;
-    let anchor_limit = MAX_EDITABLE_NODES - if clipped_seam { 2 } else { 0 };
-    let mut anchors = vec![0, CAPTURE_POINTS - 1];
-    while anchors.len() < anchor_limit {
-        let mut greatest = (FIT_ERROR, 0, 0);
+/// Keep the fewest anchors found by repeatedly splitting at the largest error.
+/// The error is measured against the same cubic interpolation used by the plot.
+pub(crate) fn fit_bezier_anchors(points: &[f32], max_nodes: usize) -> Vec<usize> {
+    use crate::curve::{CubicBezier, CurveNode};
+
+    if points.len() < 2 {
+        return (0..points.len()).collect();
+    }
+
+    let node = |index: usize| CurveNode {
+        x: index as f32,
+        y: points[index],
+    };
+    let mut anchors = vec![0, points.len() - 1];
+    while anchors.len() < max_nodes {
+        let mut greatest = (BEZIER_FIT_ERROR, 0, 0);
         for (segment, pair) in anchors.windows(2).enumerate() {
-            let (start, end) = (pair[0], pair[1]);
-            let left = points[start].clamp(0.0, 1.0);
-            let right = points[end].clamp(0.0, 1.0);
-            for (index, sample) in points.iter().enumerate().take(end).skip(start + 1) {
-                let t = (index - start) as f32 / (end - start) as f32;
-                let error = (sample.clamp(0.0, 1.0) - (left + (right - left) * t)).abs();
+            let [start, end] = [pair[0], pair[1]];
+            let previous = segment.checked_sub(1).map(|index| node(anchors[index]));
+            let next = anchors.get(segment + 2).copied().map(node);
+            let cubic = CubicBezier::between(previous, node(start), node(end), next, 0.0);
+            for (index, &sample) in points.iter().enumerate().take(end).skip(start + 1) {
+                let error = (sample - cubic.sample(index as f32)).abs();
                 if error > greatest.0 {
                     greatest = (error, segment + 1, index);
                 }
             }
         }
-        if greatest.0 <= FIT_ERROR {
+        if greatest.0 <= BEZIER_FIT_ERROR {
             break;
         }
         anchors.insert(greatest.1, greatest.2);
     }
+    anchors
+}
+
+/// Fit one captured cycle to editable cubic Bézier segments off the audio thread.
+pub(crate) fn editable_curve_from_capture(points: &[f32]) -> crate::curve::EditableCurve {
+    use crate::curve::{CurveNode, CurveSegment, EditableCurve, MAX_EDITABLE_NODES};
+
+    let clipped_seam = (points[0] - points[CAPTURE_POINTS - 1]).abs() > BEZIER_FIT_ERROR;
+    let anchor_limit = MAX_EDITABLE_NODES - if clipped_seam { 2 } else { 0 };
+    let anchors = fit_bezier_anchors(points, anchor_limit);
     let mut nodes = anchors
         .into_iter()
         .filter(|&index| !clipped_seam || (index != 1 && index != CAPTURE_POINTS - 2))
@@ -411,6 +428,7 @@ pub(crate) fn editable_curve_from_capture(points: &[f32]) -> crate::curve::Edita
         nodes,
         origin_is_clip: clipped_seam,
         high_resolution: true,
+        smooth_bezier: true,
         ..EditableCurve::default()
     }
     .normalized()
@@ -583,6 +601,34 @@ mod tests {
             assert!(
                 (actual - value).abs() <= 0.0051,
                 "point {index}: {actual} vs {value}"
+            );
+        }
+    }
+
+    #[test]
+    fn bezier_fit_simplifies_ripple_and_keeps_smooth_bounded_joins() {
+        use crate::curve::sample_editable_curve;
+        let points: [f32; CAPTURE_POINTS] = std::array::from_fn(|index| {
+            let phase = index as f32 / (CAPTURE_POINTS - 1) as f32;
+            let envelope = 1.0 - 0.6 * (std::f32::consts::PI * phase).sin().powi(2);
+            let ripple = if index % 2 == 0 { 0.001 } else { -0.001 };
+            (envelope + ripple).min(1.0)
+        });
+        let curve = editable_curve_from_capture(&points);
+        assert!(curve.smooth_bezier);
+        assert!(curve.nodes.len() < 20);
+        for (index, point) in points.iter().enumerate().step_by(16) {
+            let phase = index as f32 / (CAPTURE_POINTS - 1) as f32;
+            assert!((sample_editable_curve(&curve, phase) - point).abs() < 0.0051);
+        }
+        for node in &curve.nodes[..curve.nodes.len() - 1] {
+            let dx = 1.0e-4;
+            let left = (node.y - sample_editable_curve(&curve, node.x - dx)) / dx;
+            let right = (sample_editable_curve(&curve, node.x + dx) - node.y) / dx;
+            assert!(
+                (left - right).abs() < 0.025,
+                "phase {}: {left} vs {right}",
+                node.x
             );
         }
     }

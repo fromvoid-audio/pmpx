@@ -2264,33 +2264,40 @@ fn fit_candidate(
             y: target_y_at(origin, x, seam_y, patches, constraints),
         })
         .collect::<Vec<_>>();
-    let mut segments = Vec::with_capacity(nodes.len().saturating_sub(1));
+    let mut curve = EditableCurve {
+        segments: Vec::with_capacity(nodes.len().saturating_sub(1)),
+        nodes,
+        high_resolution: origin.high_resolution,
+        smooth_bezier: origin.smooth_bezier,
+        ..EditableCurve::default()
+    };
     let mut max_error: f32 = 0.0;
-    for pair in nodes.windows(2) {
-        let fit = if let Some(tension) =
-            untouched_origin_tension(origin, pair[0], pair[1], patches, constraints)
-        {
-            SegmentFit {
+    for index in 0..curve.nodes.len().saturating_sub(1) {
+        let unchanged_tension = if curve.smooth_bezier {
+            // Moving a neighboring node changes the shared tangent.
+            None
+        } else {
+            untouched_origin_tension(
+                origin,
+                curve.nodes[index],
+                curve.nodes[index + 1],
+                patches,
+                constraints,
+            )
+        };
+        let fit = unchanged_tension.map_or_else(
+            || fit_segment(origin, &curve, index, seam_y, patches, constraints),
+            |tension| SegmentFit {
                 tension,
                 max_error: 0.0,
-            }
-        } else {
-            fit_segment(origin, pair[0], pair[1], seam_y, patches, constraints)
-        };
+            },
+        );
         max_error = max_error.max(fit.max_error);
-        segments.push(CurveSegment {
+        curve.segments.push(CurveSegment {
             tension: fit.tension.clamp(MIN_SEGMENT_TENSION, MAX_SEGMENT_TENSION),
         });
     }
-    FittedCandidate {
-        curve: EditableCurve {
-            nodes,
-            segments,
-            high_resolution: origin.high_resolution,
-            ..EditableCurve::default()
-        },
-        max_error,
-    }
+    FittedCandidate { curve, max_error }
 }
 
 fn untouched_origin_tension(
@@ -2328,12 +2335,14 @@ fn untouched_origin_tension(
 
 fn fit_segment(
     origin: &EditableCurve,
-    left: CurveNode,
-    right: CurveNode,
+    curve: &EditableCurve,
+    index: usize,
     seam_y: f32,
     patches: &[RawPatch],
     constraints: &[RawConstraint],
 ) -> SegmentFit {
+    let left = curve.nodes[index];
+    let right = curve.nodes[index + 1];
     let baseline = origin
         .nodes
         .windows(2)
@@ -2366,7 +2375,7 @@ fn fit_segment(
         let tension = MIN_SEGMENT_TENSION
             + (MAX_SEGMENT_TENSION - MIN_SEGMENT_TENSION) * step as f32
                 / PAINT_FIT_TENSION_STEPS as f32;
-        let candidate = evaluate_segment_tension(context, left, right, tension, &samples);
+        let candidate = evaluate_segment_tension(curve, index, tension, &samples);
         if segment_fit_is_better(candidate, best, baseline) {
             best = candidate;
         }
@@ -2379,7 +2388,7 @@ fn fit_segment(
         for step in 0..=PAINT_FIT_TENSION_REFINEMENT_STEPS {
             let tension =
                 start + (end - start) * step as f32 / PAINT_FIT_TENSION_REFINEMENT_STEPS as f32;
-            let candidate = evaluate_segment_tension(context, left, right, tension, &samples);
+            let candidate = evaluate_segment_tension(curve, index, tension, &samples);
             if segment_fit_is_better(candidate, best, baseline) {
                 best = candidate;
             }
@@ -2390,15 +2399,22 @@ fn fit_segment(
 }
 
 fn evaluate_segment_tension(
-    _context: FitContext<'_>,
-    left: CurveNode,
-    right: CurveNode,
+    curve: &EditableCurve,
+    index: usize,
     tension: f32,
     samples: &[FitSample],
 ) -> SegmentFit {
+    let left = curve.nodes[index];
+    let right = curve.nodes[index + 1];
+    let bezier = curve
+        .smooth_bezier
+        .then(|| crate::curve::bezier_edge(curve, index, tension));
     let mut max_error: f32 = 0.0;
     for sample in samples {
-        let predicted = sample_curve_segment(left, right, tension, sample.x);
+        let predicted = match bezier {
+            Some(bezier) => bezier.sample(sample.x),
+            None => sample_curve_segment(left, right, tension, sample.x),
+        };
         max_error = max_error.max((predicted - sample.target_y).abs());
     }
     SegmentFit { tension, max_error }
@@ -2565,6 +2581,27 @@ fn candidate_is_valid(curve: &EditableCurve) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn paint_fit_preserves_bezier_envelope_on_untouched_segments() {
+        let curve = EditableCurve {
+            smooth_bezier: true,
+            ..crate::curve::default_editable_curve()
+        };
+        let xs = curve.nodes.iter().map(|node| node.x).collect::<Vec<_>>();
+        let fitted = fit_candidate(&curve, &xs, curve.nodes[0].y, &[], &[]);
+        assert!(fitted.curve.smooth_bezier);
+        assert!(fitted.max_error < 0.001);
+        for index in 0..128 {
+            let phase = index as f32 / 128.0;
+            assert!(
+                (sample_editable_curve(&curve, phase)
+                    - sample_editable_curve(&fitted.curve, phase))
+                .abs()
+                    < 0.001
+            );
+        }
+    }
 
     fn bounds() -> RectBounds {
         RectBounds {

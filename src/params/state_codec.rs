@@ -677,6 +677,9 @@ fn encode_phase_metadata(payload: &mut Vec<u8>, curve: &EditableCurve) {
     if curve.high_resolution {
         payload.extend_from_slice(&HIGH_RESOLUTION_METADATA_MAGIC.to_le_bytes());
     }
+    if curve.smooth_bezier {
+        payload.extend_from_slice(&BEZIER_METADATA_MAGIC.to_le_bytes());
+    }
 }
 
 fn decode_curve(
@@ -684,7 +687,7 @@ fn decode_curve(
     node_count: usize,
     with_phase_metadata: bool,
     with_origin_metadata: bool,
-    with_high_resolution_metadata: bool,
+    with_capture_metadata: bool,
 ) -> Result<EditableCurve, &'static str> {
     if !(2..=MAX_EDITABLE_NODES).contains(&node_count) {
         return Err("invalid node count bounds");
@@ -748,7 +751,10 @@ fn decode_curve(
                 ORIGIN_METADATA_MAGIC if with_origin_metadata => {
                     curve.origin_is_clip = true;
                 }
-                HIGH_RESOLUTION_METADATA_MAGIC if with_high_resolution_metadata => {
+                BEZIER_METADATA_MAGIC if with_capture_metadata => {
+                    curve.smooth_bezier = true;
+                }
+                HIGH_RESOLUTION_METADATA_MAGIC if with_capture_metadata => {
                     curve.high_resolution = true;
                 }
                 _ => {
@@ -974,7 +980,7 @@ fn decode_quick_slots(
     cursor: &mut Cursor<&[u8]>,
     with_phase_metadata: bool,
     with_origin_metadata: bool,
-    with_high_resolution_metadata: bool,
+    with_capture_metadata: bool,
 ) -> Result<Vec<QuickShapeSlot>, &'static str> {
     let Some(count) = read_u32(cursor).map(|value| value as usize) else {
         return Err("invalid preset quick slot count");
@@ -995,7 +1001,7 @@ fn decode_quick_slots(
             node_count,
             with_phase_metadata,
             with_origin_metadata,
-            with_high_resolution_metadata,
+            with_capture_metadata,
         )?;
         slots.push(QuickShapeSlot { curve });
     }

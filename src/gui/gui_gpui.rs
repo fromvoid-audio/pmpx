@@ -3324,31 +3324,94 @@ fn draw_compressor_preview(
     samples: &crate::incoming_waveform::CompressorPreviewSnapshot,
     window: &mut Window,
 ) {
+    use crate::compressor_capture::fit_bezier_anchors;
+    use crate::curve::CubicBezier;
+
     let step = (width - 1.0).max(1.0) / (samples.len() - 1) as f32;
+    let position = |node: CurveNode| {
+        point(
+            px(left + node.x * step),
+            px(top + (1.0 - node.y) * (height - 1.0).max(1.0)),
+        )
+    };
     let mut path = gpui::PathBuilder::stroke(px(2.0));
-    let mut connected = false;
-    for (index, sample) in samples.iter().copied().enumerate() {
-        let Some(gain) = sample else {
-            connected = false;
-            continue;
+    let mut start = 0;
+    while start < samples.len() {
+        let gains = samples[start..]
+            .iter()
+            .map_while(|&gain| gain)
+            .collect::<Vec<_>>();
+        let node = |index: usize| CurveNode {
+            x: (start + index) as f32,
+            y: gains[index],
         };
-        let x = left + index as f32 * step;
-        let y = top + (1.0 - gain) * (height - 1.0).max(1.0);
-        let position = point(px(x), px(y));
-        if connected {
-            path.line_to(position);
-        } else {
-            let dot_left = (x - 0.5).max(left);
-            let dot_right = (x + 0.5).min(left + width - 1.0);
-            path.move_to(point(px(dot_right), px(y)));
-            path.line_to(point(px(dot_left), px(y)));
-            path.line_to(position);
-            connected = true;
+        if gains.len() == 1 {
+            let point = position(node(0));
+            path.move_to(gpui::point((point.x - px(0.5)).max(px(left)), point.y));
+            path.line_to(gpui::point(
+                (point.x + px(0.5)).min(px(left + width - 1.0)),
+                point.y,
+            ));
+        } else if gains.len() >= 2 {
+            let anchors = fit_bezier_anchors(&gains, crate::curve::MAX_EDITABLE_NODES);
+            path.move_to(position(node(0)));
+            for (segment, pair) in anchors.windows(2).enumerate() {
+                let previous = segment.checked_sub(1).map(|index| node(anchors[index]));
+                let next = anchors.get(segment + 2).copied().map(node);
+                let cubic = CubicBezier::between(previous, node(pair[0]), node(pair[1]), next, 0.0);
+                path.cubic_bezier_to(
+                    position(cubic.end),
+                    position(cubic.control_a),
+                    position(cubic.control_b),
+                );
+            }
         }
+        start += gains.len() + 1;
     }
     if let Ok(path) = path.build() {
         window.paint_path(path, solid(pump_theme().accent_copper));
     }
+}
+
+fn append_captured_bezier_loop(
+    curve: &crate::curve::EditableCurve,
+    phase: f32,
+    bounds: Bounds<Pixels>,
+    path: &mut gpui::PathBuilder,
+    area: &mut gpui::PathBuilder,
+) -> (Pixels, Pixels) {
+    let (source, shift) = curve
+        .phase_source
+        .as_deref()
+        .map_or((curve, -phase), |source| {
+            (source, curve.phase_offset - phase)
+        });
+    let first = usize::from(source.origin_is_clip);
+    let first_node = source.nodes[first];
+    let shift = shift - (first_node.x + shift).ceil();
+    let width = (bounds.size.width - px(1.0)).max(px(1.0));
+    let height = (bounds.size.height - px(1.0)).max(px(1.0));
+    let position = |node: CurveNode, shift: f32| {
+        point(
+            bounds.left() + width * (node.x + shift),
+            bounds.top() + height * (1.0 - node.y),
+        )
+    };
+    let start = position(first_node, shift);
+    path.move_to(start);
+    area.move_to(start);
+    // Two repeats cover the whole viewport at any phase. The plot clips both ends.
+    for cycle in [shift, shift + 1.0] {
+        for index in first..source.nodes.len() - 1 {
+            let cubic = crate::curve::bezier_edge(source, index, source.segments[index].tension);
+            let control_a = position(cubic.control_a, cycle);
+            let control_b = position(cubic.control_b, cycle);
+            let end = position(cubic.end, cycle);
+            path.cubic_bezier_to(end, control_a, control_b);
+            area.cubic_bezier_to(end, control_a, control_b);
+        }
+    }
+    (start.x, start.x + width * 2.0)
 }
 
 fn curve_point_pixels(
@@ -3542,28 +3605,38 @@ fn draw_curve(
     } else {
         CURVE_STROKE_WIDTH
     }));
-    let samples = 128;
-    for index in 0..=samples {
-        let x = index as f32 / samples as f32;
-        let authored = (x + phase).rem_euclid(1.0);
-        let y = sample_editable_curve(&curve, authored).clamp(0.0, 1.0);
-        let point = point(
-            px(left + x * (width - 1.0).max(1.0)),
-            px(top + (1.0 - y) * (height - 1.0).max(1.0)),
-        );
-        if index == 0 {
-            path.move_to(point);
-            area.move_to(point);
-        } else {
-            path.line_to(point);
-            area.line_to(point);
+    let mask = curve.smooth_bezier.then_some(gpui::ContentMask {
+        bounds: curve_bounds,
+    });
+    let (area_left, area_right) = if curve.smooth_bezier {
+        append_captured_bezier_loop(&curve, phase, curve_bounds, &mut path, &mut area)
+    } else {
+        let samples = 128;
+        for index in 0..=samples {
+            let x = index as f32 / samples as f32;
+            let authored = (x + phase).rem_euclid(1.0);
+            let y = sample_editable_curve(&curve, authored).clamp(0.0, 1.0);
+            let point = point(
+                px(left + x * (width - 1.0).max(1.0)),
+                px(top + (1.0 - y) * (height - 1.0).max(1.0)),
+            );
+            if index == 0 {
+                path.move_to(point);
+                area.move_to(point);
+            } else {
+                path.line_to(point);
+                area.line_to(point);
+            }
         }
-    }
-    area.line_to(point(px(left + width), px(top + height)));
-    area.line_to(point(px(left), px(top + height)));
+        (px(left), px(left + width))
+    };
+    area.line_to(point(area_right, px(top + height)));
+    area.line_to(point(area_left, px(top + height)));
     area.close();
     if let Ok(area) = area.build() {
-        window.paint_path(area, solid(theme.accent_mint.with_alpha(17)));
+        window.with_content_mask(mask, |window| {
+            window.paint_path(area, solid(theme.accent_mint.with_alpha(17)));
+        });
     }
     if state.params().effects()[0] >= 0.5 || !state.filter_enabled() {
         draw_crossover_preview(curve_bounds, state, window, cx);
@@ -3578,7 +3651,9 @@ fn draw_curve(
         theme.accent_mint
     };
     if let Ok(path) = path.build() {
-        window.paint_path(path, solid(curve_color));
+        window.with_content_mask(mask, |window| {
+            window.paint_path(path, solid(curve_color));
+        });
     }
     if compressor_enabled && !state.params().bypassed() && compressor[16] < 0.5 {
         if let Some(gain) = state.status().compressor_preview_snapshot() {
