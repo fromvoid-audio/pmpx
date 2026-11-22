@@ -1565,7 +1565,7 @@ fn processor_supports_exact_in_place_channel_buffers() {
 }
 
 #[test]
-fn track_spectrum_reads_main_input_before_in_place_vst3_processing() {
+fn track_spectrum_reads_both_sides_of_in_place_vst3_processing() {
     use crate::track_spectrum::{SpectrumAnalyzer, WINDOW_SAMPLES};
 
     let shared = Arc::new(PumpVst3Shared::new());
@@ -1600,7 +1600,9 @@ fn track_spectrum_reads_main_input_before_in_place_vst3_processing() {
     let trace = analyzer
         .update(shared.status.track_spectrum(), 1_000_000)
         .unwrap();
-    let peak = trace.into_iter().fold(0.0_f32, f32::max);
+    let peak = trace.pre.into_iter().fold(0.0_f32, f32::max);
+    let post_peak = trace.post.into_iter().fold(0.0_f32, f32::max);
+    assert!(post_peak > 0.0 && post_peak < peak - 0.20);
     assert!(
         peak > 0.90 && peak < 0.94,
         "spectrum should show the pre-gain input"

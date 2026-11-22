@@ -220,6 +220,7 @@ pub(crate) fn process_stereo_block(
                 telemetry,
                 settings,
                 [input_left, input_right],
+                [left[sample_offset], right[sample_offset]],
                 sidechain_sample,
             );
         }
@@ -328,6 +329,7 @@ pub(crate) unsafe fn process_stereo_block_raw(
                 telemetry,
                 settings,
                 [input_left, input_right],
+                [left, right],
                 sidechain_sample,
             );
         }

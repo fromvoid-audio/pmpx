@@ -833,6 +833,12 @@ mod macos {
             "the spectrum should add visible ink ({before} to {after})"
         );
 
+        let post_ink = |pixel: &[u8]| {
+            pixel[0] > 100
+                && pixel[0].saturating_sub(pixel[1]) > 28
+                && pixel[0].saturating_sub(pixel[2]) > 35
+        };
+        assert!(count_region_pixels(&gui, "frequency-plot", post_ink) > 45);
         // Both band bars activate DSP without a separate switch, and one Undo
         // restores the entire drag including its activation.
         for index in [3, 4] {

@@ -746,7 +746,8 @@ mod tests {
         });
         let mut analyzer = SpectrumAnalyzer::default();
         let trace = analyzer.update(spectrum, 1_000_000).unwrap();
-        let peak = trace.into_iter().fold(0.0_f32, f32::max);
+        assert_eq!(trace.pre, trace.post);
+        let peak = trace.pre.into_iter().fold(0.0_f32, f32::max);
         assert!(peak > 0.90 && peak < 0.94);
         processor.stop_processing();
         assert!(analyzer.update(spectrum, 1_010_000).is_none());

@@ -31,7 +31,7 @@ use crate::params::{
     PARAM_FILTER_LP_FREQ_ID, PARAM_FILTER_LP_Q_ID, PARAM_FREE_RATE_ID, PARAM_MIX_ID,
     PARAM_OUTPUT_GAIN_ID, PARAM_SMOOTH_ID, PARAM_SWING_ID, SYNC_DIVISIONS, TIMING_MODE_FREE,
 };
-use crate::track_spectrum::{SpectrumAnalyzer, SpectrumTrace};
+use crate::track_spectrum::{SpectrumAnalyzer, SpectrumTrace, SpectrumTraces};
 
 use super::model::HostParamFlushRequester;
 use super::model::{
@@ -1137,7 +1137,13 @@ pub fn seed_screenshot_track_spectrum(status: &crate::GuiStatus) {
         let bass = 0.35 * tone(8.0);
         let mid = 0.16 * tone(28.0) + 0.12 * tone(84.0);
         let upper = 0.04 * tone(260.0) + 0.02 * tone(647.0);
-        writer.record(input, [bass + mid + upper, bass + mid - upper]);
+        let before = bass + mid;
+        let after = 0.24 * bass + 0.55 * mid;
+        writer.record(
+            input,
+            [before + upper, before - upper],
+            [after + 0.78 * upper, after - 0.78 * upper],
+        );
     }
 }
 
@@ -1169,6 +1175,7 @@ pub fn seed_screenshot_waveform(status: &crate::GuiStatus, params: &PumpParams) 
                 bypassed: false,
             },
             &settings,
+            [carrier * envelope, carrier * envelope * 0.82],
             [carrier * envelope, carrier * envelope * 0.82],
             Some([sidechain, 0.0]),
         );
@@ -4445,7 +4452,16 @@ fn crossover_plot(left: f32, top: f32, width: f32, height: f32) -> Bounds<Pixels
     )
 }
 
-fn draw_track_spectrum(plot: Bounds<Pixels>, spectrum: &SpectrumTrace, window: &mut Window) {
+fn draw_track_spectrum(
+    plot: Bounds<Pixels>,
+    spectrum: &SpectrumTrace,
+    color: PumpColor,
+    fill_alpha: u8,
+    window: &mut Window,
+) {
+    if spectrum.iter().all(|&value| value < 0.012) {
+        return;
+    }
     let mut line = gpui::PathBuilder::stroke(px(1.0));
     let mut area = gpui::PathBuilder::fill();
     area.move_to(point(plot.left(), plot.bottom()));
@@ -4464,12 +4480,11 @@ fn draw_track_spectrum(plot: Bounds<Pixels>, spectrum: &SpectrumTrace, window: &
     }
     area.line_to(point(plot.right(), plot.bottom()));
     area.close();
-    let gray = pump_theme().text_muted;
     if let Ok(path) = area.build() {
-        window.paint_path(path, solid(gray.with_alpha(33)));
+        window.paint_path(path, solid(color.with_alpha(fill_alpha)));
     }
     if let Ok(path) = line.build() {
-        window.paint_path(path, solid(gray.with_alpha(130)));
+        window.paint_path(path, solid(color.with_alpha(160)));
     }
 }
 
@@ -5612,7 +5627,7 @@ impl PumpEditor {
 
     fn filter_panel(
         &self,
-        spectrum: Option<SpectrumTrace>,
+        spectrum: Option<SpectrumTraces>,
         cx: &Context<Self>,
     ) -> gpui::Stateful<gpui::Div> {
         let theme = pump_theme();
@@ -5632,7 +5647,8 @@ impl PumpEditor {
                 let (left, top, width, height) = frequency_plot_geometry(bounds);
                 let grid = crossover_plot(left, top, width, height);
                 if let Some(spectrum) = &spectrum {
-                    draw_track_spectrum(grid, spectrum, window);
+                    draw_track_spectrum(grid, &spectrum.pre, theme.text_muted, 28, window);
+                    draw_track_spectrum(grid, &spectrum.post, theme.accent_copper, 14, window);
                 }
                 for fraction in [0.0, 1.0 / 3.0, 2.0 / 3.0, 1.0] {
                     let x = grid.left() + grid.size.width * fraction;
@@ -5669,6 +5685,18 @@ impl PumpEditor {
                     .when(handle_hovered, |el| el.cursor(CursorStyle::ClosedHand))
                     .on_mouse_down(MouseButton::Left, cx.listener(Self::frequency_mouse_down))
                     .child(plot),
+            )
+            .child(
+                div()
+                    .flex()
+                    .items_center()
+                    .justify_end()
+                    .gap(px(10.0))
+                    .h(px(10.0))
+                    .text_size(px(8.0))
+                    .line_height(px(10.0))
+                    .child(div().text_color(solid(theme.text_muted)).child("PRE"))
+                    .child(div().text_color(solid(theme.accent_copper)).child("POST")),
             )
             .child(self.band_mix_group(cx))
     }

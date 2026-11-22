@@ -690,12 +690,13 @@ impl WaveformBlock<'_> {
         telemetry: crate::dsp::DspTelemetry,
         settings: &crate::dsp::DspSettings,
         input: [f32; 2],
+        output: [f32; 2],
         sidechain: Option<[f32; 2]>,
     ) {
         if self.capture_spectrum {
             self.writers
                 .spectrum
-                .record(self.status.track_spectrum(), input);
+                .record(self.status.track_spectrum(), input, output);
         }
         let record = |writer: &mut IncomingWaveformWriter, buffer, [left, right]: [f32; 2]| {
             writer.record_with_cycle_mapping_and_timing_mode(
