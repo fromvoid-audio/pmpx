@@ -3964,15 +3964,17 @@ fn draw_curve(
         point(meter.left() + px(1.0), meter.top() + px(1.0)),
         point(meter.right() - px(1.0), meter.bottom() - px(1.0)),
     );
+    #[cfg(feature = "screenshot-test")]
+    record_screenshot_bounds("gain-reduction-meter", meter_inner);
     window.paint_quad(fill(meter_inner, solid(pump_meter_colors().track)));
     if fraction > 0.0 {
         window.paint_quad(fill(
             Bounds::from_corners(
+                meter_inner.origin,
                 point(
-                    meter_inner.left(),
-                    meter_inner.bottom() - meter_inner.size.height * fraction,
+                    meter_inner.right(),
+                    meter_inner.top() + meter_inner.size.height * fraction,
                 ),
-                meter_inner.bottom_right(),
             ),
             solid(if fraction > 0.75 {
                 pump_meter_colors().hot

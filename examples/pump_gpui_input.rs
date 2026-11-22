@@ -640,6 +640,42 @@ mod macos {
         pump_appkit(app, &gui, 0.1);
         capture_frame(&gui, "opened instrument editor");
 
+        let transport = pump::GuiTransportTelemetry {
+            is_playing: false,
+            transport_is_playing: true,
+            has_host_beats_timeline: false,
+            beat_phase: 0.0,
+            tempo_bpm: 120.0,
+            beats_per_cycle: 1.0,
+            delay_beats: 0,
+            delay_progress: 0.0,
+            timing_mode: 0,
+            effective_cycle_rate_hz: 0.0,
+        };
+        status.update_transport(0.0, transport);
+        status.publish_gain_reduction(0.25, true);
+        pump_appkit(app, &gui, 0.06);
+        let (width, height, pixels) = capture_pixels(&gui, "gain reduction meter");
+        let [x, y, w, h] = pump::gui_gpui::screenshot_bounds("gain-reduction-meter");
+        let meter_x = ((x + w * 0.5) * width as f32 / OUTPUT_WIDTH as f32) as usize;
+        let meter_pixel_at = |fraction| {
+            let row = ((y + h * fraction) * height as f32 / OUTPUT_HEIGHT as f32) as usize;
+            let offset = (row * width as usize + meter_x) * 4;
+            &pixels[offset..offset + 4]
+        };
+        assert!(
+            meter_pixel_at(0.08)[0].saturating_sub(meter_pixel_at(0.92)[0]) > 60,
+            "gain reduction should fill from the top of the meter"
+        );
+        status.mark_gain_reduction_inactive();
+        status.update_transport(
+            0.0,
+            pump::GuiTransportTelemetry {
+                transport_is_playing: false,
+                ..transport
+            },
+        );
+
         for key in [
             "timing-mode",
             "timing-value",
