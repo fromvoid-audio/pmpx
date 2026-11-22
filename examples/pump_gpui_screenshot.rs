@@ -394,7 +394,7 @@ mod macos {
                 expanded_width,
                 400,
             );
-            let (close_x, close_y) = center("close-compressor");
+            let (close_x, close_y) = center("compressor-panel");
             send_click(
                 fixture.window,
                 expanded_width,
@@ -422,7 +422,7 @@ mod macos {
                 expanded_width,
                 400,
             );
-            let (close_x, close_y) = center("close-filter");
+            let (close_x, close_y) = center("filter-panel");
             send_click(
                 fixture.window,
                 expanded_width,

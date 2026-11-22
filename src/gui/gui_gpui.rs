@@ -5687,10 +5687,10 @@ impl PumpEditor {
         )
     }
 
-    fn panel_shell(&self, panel: EditorPanel, cx: &Context<Self>) -> gpui::Stateful<gpui::Div> {
-        let (id, title, close_id) = match panel {
-            EditorPanel::Compressor => ("compressor-drawer", "COMPRESSOR", "close-compressor"),
-            EditorPanel::Filter => ("filter-drawer", "FILTER", "close-filter"),
+    fn panel_shell(&self, panel: EditorPanel) -> gpui::Stateful<gpui::Div> {
+        let (id, title) = match panel {
+            EditorPanel::Compressor => ("compressor-drawer", "COMPRESSOR"),
+            EditorPanel::Filter => ("filter-drawer", "FILTER"),
         };
         let theme = pump_theme();
         div()
@@ -5709,24 +5709,9 @@ impl PumpEditor {
                 div()
                     .flex()
                     .items_center()
-                    .justify_between()
                     .h(px(20.))
                     .flex_shrink_0()
-                    .child(group_heading(title))
-                    .child(
-                        button(close_id, "CLOSE".into(), false, 46., None)
-                            .h(px(18.))
-                            .on_click(cx.listener(move |view, _, window, cx| {
-                                window.focus(
-                                    view.button_focus_handle(match panel {
-                                        EditorPanel::Compressor => "compressor-panel",
-                                        EditorPanel::Filter => "filter-panel",
-                                    }),
-                                    cx,
-                                );
-                                view.toggle_panel(panel, window, cx);
-                            })),
-                    ),
+                    .child(group_heading(title)),
             )
     }
 
@@ -5778,7 +5763,7 @@ impl PumpEditor {
             },
         )
         .size_full();
-        self.panel_shell(EditorPanel::Filter, cx)
+        self.panel_shell(EditorPanel::Filter)
             .child(
                 div()
                     .id("frequency-plot")
@@ -5839,7 +5824,7 @@ impl PumpEditor {
         )
         .w(px(14.))
         .h(px(78.));
-        self.panel_shell(EditorPanel::Compressor, cx)
+        self.panel_shell(EditorPanel::Compressor)
             .child(div().flex().gap(px(4.)).children(controls(&[0, 8, 18])))
             .child(
                 div()
@@ -5909,12 +5894,7 @@ impl PumpEditor {
                     .border_color(solid(theme.border))
                     .child(group_heading("SIDECHAIN")),
             )
-            .child(
-                div()
-                    .flex()
-                    .gap(px(4.))
-                    .children(controls(&[9, 16, 12, 13])),
-            )
+            .child(div().flex().gap(px(4.)).children(controls(&[9, 12, 13])))
             .child(
                 div()
                     .h(px(46.))
@@ -6967,6 +6947,17 @@ impl Render for PumpEditor {
         let dock_right = right > 0 && available >= right + if dock_left { left } else { 0 };
         let compressor = dock_left.then(|| self.compressor_panel(cx));
         let filter = dock_right.then(|| self.filter_panel(spectrum, cx));
+        // Overlays stop above the main footer so the same toggle can close them.
+        let overlay_height =
+            window.viewport_size().height - px(FOOTER_HEIGHT + PUMP_VISUAL_METRICS.space_8 + 2.0);
+        let overlay = |panel: gpui::Stateful<gpui::Div>| {
+            panel
+                .absolute()
+                .top(px(0.))
+                .h(overlay_height)
+                .gap(px(6.))
+                .occlude()
+        };
         div()
             .id("pump-window")
             .track_focus(&self.editor_focus_handle)
@@ -6983,24 +6974,11 @@ impl Render for PumpEditor {
             .children(compressor)
             .child(main)
             .children(filter)
-            // Keep the controls reachable if the host holds the current size.
             .when(self.compressor_panel_open && !dock_left, |el| {
-                el.child(
-                    self.compressor_panel(cx)
-                        .absolute()
-                        .left(px(0.))
-                        .top(px(0.))
-                        .occlude(),
-                )
+                el.child(overlay(self.compressor_panel(cx)).left(px(0.)))
             })
             .when(right > 0 && !dock_right, |el| {
-                el.child(
-                    self.filter_panel(spectrum, cx)
-                        .absolute()
-                        .right(px(0.))
-                        .top(px(0.))
-                        .occlude(),
-                )
+                el.child(overlay(self.filter_panel(spectrum, cx)).right(px(0.)))
             })
     }
 }

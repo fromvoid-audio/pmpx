@@ -918,14 +918,15 @@ mod macos {
         let [x, y, w, h] = pump::gui_gpui::screenshot_bounds("curve-plot");
         assert!((x - (base_plot[0] + PANEL_WIDTH as f32)).abs() < 0.01);
         assert_eq!([y, w, h], base_plot[1..]);
-        click_control(fixture, "close-filter", 0);
+        click_control(fixture, "filter-panel", 0);
         pump_appkit(app, &gui, 0.06);
         fixture.sync_host_size(OUTPUT_WIDTH + PANEL_WIDTH);
         assert_eq!(
             pump::gui_gpui::screenshot_bounds("curve-plot"),
             [x, y, w, h]
         );
-        for index in 0..20 {
+        assert!(pump::gui_gpui::screenshot_bounds_if_painted("compressor-16").is_none());
+        for index in (0..20).filter(|&index| index != 16) {
             let key = format!("compressor-{index}");
             wait_for_control(app, &gui, &key);
             let [x, y, w, h] = pump::gui_gpui::screenshot_bounds(&key);
@@ -1205,6 +1206,41 @@ mod macos {
         assert_anchored(edge, OUTPUT_WIDTH + PANEL_WIDTH);
         let [filter_x, _, _, _] = pump::gui_gpui::screenshot_bounds("frequency-plot");
         assert!(filter_x >= OUTPUT_WIDTH as f32);
+        click_control(&fixture, "filter-panel", 0);
+        pump_appkit_events(app, 0.08, || {});
+        assert_anchored(edge, OUTPUT_WIDTH);
+        let [_, capture_y, _, capture_h] = pump::gui_gpui::screenshot_bounds("compressor-capture");
+        assert!(capture_y + capture_h < center("compressor-panel").1 as f32);
+        click_control(&fixture, "compressor-panel", 0);
+        pump_appkit_events(app, 0.08, || {});
+
+        // A second click on the edge icon must also dismiss the compressor
+        // overlay. The next click docks it after we make room on the left.
+        fixture.window.setFrameOrigin_(NSPoint::new(
+            visible.origin.x + f64::from(PANEL_WIDTH) + 24.0,
+            visible.origin.y + 30.0,
+        ));
+        click_control(&fixture, "compressor-panel", 0);
+        pump_appkit_events(app, 0.08, || {});
+        assert_anchored(original, OUTPUT_WIDTH + PANEL_WIDTH);
+        click_control(&fixture, "compressor-panel", 0);
+        pump_appkit_events(app, 0.08, || {});
+        assert_anchored(original, OUTPUT_WIDTH);
+
+        // No host frame means the right-hand panel must open as an overlay,
+        // with the same icon available to close it.
+        assert_eq!(view.setFrame(std::ptr::null_mut()), kResultOk);
+        click_control(&fixture, "filter-panel", 0);
+        pump_appkit_events(app, 0.08, || {});
+        assert_anchored(original, OUTPUT_WIDTH);
+        let [filter_x, _, _, _] = pump::gui_gpui::screenshot_bounds("frequency-plot");
+        assert!(filter_x > 0.0 && filter_x < OUTPUT_WIDTH as f32);
+        click_control(&fixture, "filter-panel", 0);
+        pump_appkit_events(app, 0.08, || {});
+        assert_eq!(view.setFrame(frame.as_ptr()), kResultOk);
+        click_control(&fixture, "filter-panel", 0);
+        pump_appkit_events(app, 0.08, || {});
+        assert_anchored(original, OUTPUT_WIDTH + PANEL_WIDTH);
         assert_eq!(view.removed(), kResultOk);
     }
 

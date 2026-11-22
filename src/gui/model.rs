@@ -1896,7 +1896,7 @@ fn reduce_editor_message(state: &mut PumpEditorState, message: EditorMessage) {
             } else if state.params.bypassed() {
                 state.capture_error = Some("Turn off bypass to capture");
             } else if state.params.compressor()[16] >= 0.5 {
-                state.capture_error = Some("Turn off sidechain listen to capture");
+                state.capture_error = Some("Turn off Sidechain Listen in the host to capture");
             } else if state.params.delay_beats() != 0 {
                 state.capture_error = Some("Set Delay to zero to capture");
             } else {

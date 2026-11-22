@@ -114,11 +114,11 @@ mapping and compatibility behavior.
 
 Open the left-hand `COMP` panel to enable live compression. It has a vertical
 threshold control, a gain-reduction meter and knobs for ratio, attack, release,
-range, makeup and dry/wet. The detector can use the main
-input, the host's external stereo sidechain, or a blend of the two; its gain,
-filter and listen controls affect the detector. Route the external signal to
-Pump's sidechain input in your DAW. The compressor also offers automatic
-release, soft clipping and a lightweight 2× oversampling option. This is Pump's
+range, makeup and dry/wet. The detector can use the main input, the host's
+external stereo sidechain, or a blend of the two, with dedicated gain and filter
+controls. Route the external signal to Pump's sidechain input in your DAW. The
+compressor also offers automatic release, soft clipping and a lightweight 2×
+oversampling option. This is Pump's
 own compressor, not a model of Ableton's Glue Compressor.
 
 The compressor’s Smooth knob adds up to 100 ms of smoothing to its gain
@@ -130,9 +130,11 @@ blue on the track waveform. The overlay follows the same Sync/Live display
 mode and can be shown with the compressor off.
 
 While compression is active, the coral gain curve updates live in the plot.
-To freeze it, choose Sync with Delay at zero, turn detector listen and bypass off, start host
-playback, then press `CAPTURE` in the compressor panel. Pump waits for the next cycle boundary and
-records one full cycle. It turns compression off and replaces the drawn curve
+To freeze it, choose Sync with Delay at zero, turn bypass off, start host
+playback, then press `CAPTURE` in the compressor panel. If Sidechain Listen is
+active in an existing project, turn it off via the host parameter first. Pump
+waits for the next cycle boundary and records one full cycle. It turns
+compression off and replaces the drawn curve
 with an editable Bézier envelope. The fitter tries the smallest curves first
 and uses wider handles to shape the attack and release. Complex changes can
 use up to 12 editable points.
