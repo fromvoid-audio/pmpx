@@ -1183,14 +1183,17 @@ fn decode_compressor(
     version: u32,
 ) -> Result<[f32; crate::compressor_controls::COUNT], &'static str> {
     let mut values = crate::compressor_controls::DEFAULTS;
-    if version >= 23 {
-        for (index, value) in values.iter_mut().enumerate() {
-            let raw = read_f32(cursor).ok_or("truncated compressor settings")?;
-            if !raw.is_finite() {
-                return Err("invalid compressor settings");
-            }
-            *value = crate::compressor_controls::sanitize(index, raw);
+    let count = match version {
+        ..=22 => 0,
+        23 => crate::compressor_controls::LEGACY_COUNT,
+        _ => crate::compressor_controls::COUNT,
+    };
+    for (index, value) in values.iter_mut().take(count).enumerate() {
+        let raw = read_f32(cursor).ok_or("truncated compressor settings")?;
+        if !raw.is_finite() {
+            return Err("invalid compressor settings");
         }
+        *value = crate::compressor_controls::sanitize(index, raw);
     }
     Ok(values)
 }

@@ -7,7 +7,7 @@ use std::time::{SystemTime, UNIX_EPOCH};
 use std::{cell::RefCell, panic::AssertUnwindSafe};
 
 const PRESET_STORE_MAGIC: &[u8; 4] = b"PPBK";
-const PRESET_STORE_VERSION: u32 = 17;
+const PRESET_STORE_VERSION: u32 = 18;
 const PRESET_STORE_PATH_ENV: &str = "PUMP_PRESET_BANK_PATH";
 const PRESET_STORE_FILE_NAME: &str = "preset-bank.bin";
 const MIN_CURVE_BYTES: usize = 2 * 8 + 4;
@@ -538,14 +538,17 @@ fn decode_preset_bank_payload(payload: &[u8]) -> Result<PumpPresetBank, String> 
             }
         }
         let mut compressor = crate::compressor_controls::DEFAULTS;
-        if version >= 17 {
-            for (index, value) in compressor.iter_mut().enumerate() {
-                let raw = read_f32(&mut cursor).ok_or("truncated compressor settings")?;
-                if !raw.is_finite() {
-                    return Err("invalid compressor settings".to_string());
-                }
-                *value = crate::compressor_controls::sanitize(index, raw);
+        let count = match version {
+            ..=16 => 0,
+            17 => crate::compressor_controls::LEGACY_COUNT,
+            _ => crate::compressor_controls::COUNT,
+        };
+        for (index, value) in compressor.iter_mut().take(count).enumerate() {
+            let raw = read_f32(&mut cursor).ok_or("truncated compressor settings")?;
+            if !raw.is_finite() {
+                return Err("invalid compressor settings".to_string());
             }
+            *value = crate::compressor_controls::sanitize(index, raw);
         }
         presets.push(PumpPreset {
             name: sanitize_preset_name(raw_name, index),
@@ -1106,13 +1109,20 @@ mod tests {
     }
 
     #[test]
-    fn compressor_controls_roundtrip_and_v16_defaults() {
+    fn compressor_controls_roundtrip_and_migrate_older_presets() {
         let mut bank = PumpPresetBank::default_init();
         bank.presets[0].compressor[0] = 1.0;
         bank.presets[0].compressor[1] = -27.0;
+        let smooth = crate::compressor_controls::SMOOTH_INDEX;
+        bank.presets[0].compressor[smooth] = 40.0;
         let mut bytes = encode_preset_bank_payload(&bank);
         assert_eq!(decode_preset_bank_payload(&bytes).unwrap(), bank);
-        bytes.truncate(bytes.len() - crate::compressor_controls::COUNT * 4);
+        bytes.truncate(bytes.len() - 4);
+        write_payload_u32(&mut bytes, 4, 17);
+        bank.presets[0].compressor[smooth] = 0.0;
+        assert_eq!(decode_preset_bank_payload(&bytes).unwrap(), bank);
+
+        bytes.truncate(bytes.len() - crate::compressor_controls::LEGACY_COUNT * 4);
         write_payload_u32(&mut bytes, 4, 16);
         assert_eq!(
             decode_preset_bank_payload(&bytes).unwrap().presets[0].compressor,

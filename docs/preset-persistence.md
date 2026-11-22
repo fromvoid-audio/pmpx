@@ -11,6 +11,9 @@ cycle-start Delay to the top-level, preset, and sound-state timing records.
 Older payloads seed references from their working snapshots and default Delay
 to zero, so they reopen clean.
 
+Project payload v24 and preset-store v18 append compressor envelope smoothing.
+Older compressor settings load with smoothing at 0 ms.
+
 Changing A/B publishes the selected snapshot through the existing atomic audio
 parameter boundary. The processor never reads the UI-owned snapshot lock.
 Copy is explicit and directional (active to inactive). Command-clicking the

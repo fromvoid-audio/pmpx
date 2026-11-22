@@ -4881,12 +4881,12 @@ mod tests {
 
     #[test]
     fn captured_compression_preserves_gain_shape_on_replay() {
-        for (phase, swing) in [(0.0, 0.0), (0.2, 0.35)] {
-            check_captured_compression_replay(phase, swing);
+        for (phase, swing, smooth_ms) in [(0.0, 0.0, 0.0), (0.2, 0.35, 0.0), (0.2, 0.35, 20.0)] {
+            check_captured_compression_replay(phase, swing, smooth_ms);
         }
     }
 
-    fn check_captured_compression_replay(phase: f32, swing: f32) {
+    fn check_captured_compression_replay(phase: f32, swing: f32, smooth_ms: f32) {
         use crate::dsp::PumpEngine;
         use crate::sample_automation::{
             dsp_settings_from_params, process_stereo_block, ParamEventSchedule, StereoBlockSlices,
@@ -4902,6 +4902,7 @@ mod tests {
         params.set_compressor_control(4, 4.0);
         params.set_compressor_control(6, 6.0);
         params.set_compressor_control(9, 1.0);
+        params.set_compressor_control(crate::compressor_controls::SMOOTH_INDEX, smooth_ms);
         params.set_mix(0.6);
         params.set_phase_offset(phase);
         params.set_swing(swing);

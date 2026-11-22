@@ -11,6 +11,7 @@ pub(crate) struct CompressorSettings {
     pub(crate) ratio: f32,
     pub(crate) attack_ms: f32,
     pub(crate) release_ms: f32,
+    pub(crate) smooth_ms: f32,
     pub(crate) range_db: f32,
     pub(crate) auto_release: bool,
 }
@@ -21,9 +22,10 @@ pub(crate) struct CompressorDetector {
     sample_rate: f32,
     reduction_db: f32,
     slow_reduction_db: f32,
+    smoothed_reduction_db: f32,
     slow_coefficient: f32,
-    cached_times: (f32, f32),
-    coefficients: (f32, f32),
+    cached_times: [f32; 3],
+    coefficients: [f32; 3],
 }
 
 impl CompressorDetector {
@@ -36,6 +38,7 @@ impl CompressorDetector {
             },
             reduction_db: 0.0,
             slow_reduction_db: 0.0,
+            smoothed_reduction_db: 0.0,
             slow_coefficient: time_coefficient(
                 1_000.0,
                 if sample_rate.is_finite() && sample_rate > 0.0 {
@@ -44,20 +47,22 @@ impl CompressorDetector {
                     44_100.0
                 },
             ),
-            cached_times: (f32::NAN, f32::NAN),
-            coefficients: (0.0, 0.0),
+            cached_times: [f32::NAN; 3],
+            coefficients: [0.0; 3],
         }
     }
 
     pub(crate) fn reset(&mut self) {
         self.reduction_db = 0.0;
         self.slow_reduction_db = 0.0;
+        self.smoothed_reduction_db = 0.0;
     }
 
     /// Transfer the detector history without changing this instance's sample rate.
     pub(crate) fn synchronize_from(&mut self, other: &Self) {
         self.reduction_db = other.reduction_db;
         self.slow_reduction_db = other.slow_reduction_db;
+        self.smoothed_reduction_db = other.smoothed_reduction_db;
     }
 
     /// Advance by one stereo detector frame and return linear gain in [0, 1].
@@ -68,25 +73,27 @@ impl CompressorDetector {
         let ratio = finite_or(settings.ratio, 1.0).clamp(1.0, 100.0);
         let range_db = finite_or(settings.range_db, 0.0).clamp(0.0, 120.0);
         let target = ((input_db - threshold_db).max(0.0) * (1.0 - 1.0 / ratio)).min(range_db);
-        let times = (
+        let times = [
             finite_or(settings.attack_ms, 0.0).clamp(0.0, 60_000.0),
             if settings.auto_release {
                 100.0
             } else {
                 finite_or(settings.release_ms, 0.0).clamp(0.0, 60_000.0)
             },
-        );
+            finite_or(settings.smooth_ms, 0.0).clamp(
+                0.0,
+                crate::compressor_controls::MAX[crate::compressor_controls::SMOOTH_INDEX],
+            ),
+        ];
         if times != self.cached_times {
             self.cached_times = times;
-            self.coefficients = (
-                time_coefficient(times.0, self.sample_rate),
-                time_coefficient(times.1, self.sample_rate),
-            );
+            self.coefficients = times.map(|time| time_coefficient(time, self.sample_rate));
         }
+        let [attack, release, smooth] = self.coefficients;
         let coefficient = if target > self.reduction_db {
-            self.coefficients.0
+            attack
         } else {
-            self.coefficients.1
+            release
         };
         self.reduction_db = target + coefficient * (self.reduction_db - target);
         self.slow_reduction_db = target + self.slow_coefficient * (self.slow_reduction_db - target);
@@ -95,7 +102,11 @@ impl CompressorDetector {
         } else {
             self.reduction_db
         };
-        10.0_f32.powf(-reduction_db * 0.05)
+        // Smooth the final reduction in dB so the applied gain, preview and
+        // captured envelope all follow the same detector output.
+        self.smoothed_reduction_db =
+            reduction_db + smooth * (self.smoothed_reduction_db - reduction_db);
+        10.0_f32.powf(-self.smoothed_reduction_db * 0.05)
     }
 }
 
@@ -266,6 +277,7 @@ mod tests {
             ratio: 4.0,
             attack_ms: 0.0,
             release_ms: 0.0,
+            smooth_ms: 0.0,
             range_db: 60.0,
             auto_release: false,
         }
@@ -308,6 +320,43 @@ mod tests {
         assert!((detector.reduction_db - after_attack * (-1.0_f32).exp()).abs() < 1.0e-4);
         detector.reset();
         assert_eq!(detector.process(0.0, 0.0, controls), 1.0);
+    }
+
+    #[test]
+    fn envelope_smoothing_reduces_gain_ripple_and_keeps_the_steady_state() {
+        for sample_rate in [1_000.0, 2_000.0] {
+            let raw_settings = settings();
+            let smooth_settings = CompressorSettings {
+                smooth_ms: 20.0,
+                ..raw_settings
+            };
+            let mut raw = CompressorDetector::new(sample_rate);
+            let mut smooth = CompressorDetector::new(sample_rate);
+            let frames = sample_rate as usize;
+            let mut raw_step = 0.0_f32;
+            let mut smooth_step = 0.0_f32;
+            let mut previous = (1.0, 1.0);
+            for frame in 0..frames {
+                let input = if frame % 2 == 0 { 1.0 } else { 0.25 };
+                let gains = (
+                    raw.process(input, 0.0, raw_settings),
+                    smooth.process(input, 0.0, smooth_settings),
+                );
+                if frame >= frames / 2 {
+                    raw_step = raw_step.max((gains.0 - previous.0).abs());
+                    smooth_step = smooth_step.max((gains.1 - previous.1).abs());
+                }
+                previous = gains;
+            }
+            assert!(smooth_step < raw_step * 0.06);
+            for _ in 0..frames {
+                smooth.process(1.0, 0.0, smooth_settings);
+            }
+            let expected = raw.process(1.0, 0.0, raw_settings);
+            assert!((smooth.process(1.0, 0.0, smooth_settings) - expected).abs() < 0.001);
+            smooth.reset();
+            assert_eq!(smooth.process(0.0, 0.0, smooth_settings), 1.0);
+        }
     }
 
     #[test]
@@ -363,6 +412,7 @@ mod tests {
             ratio: f32::NAN,
             attack_ms: f32::NAN,
             release_ms: f32::NAN,
+            smooth_ms: f32::NAN,
             range_db: f32::NAN,
             auto_release: false,
         };

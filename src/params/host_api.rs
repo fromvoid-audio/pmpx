@@ -83,7 +83,7 @@ pub struct Vst3ParamInfo {
     pub is_bypass: bool,
 }
 
-const PARAM_DEFS: [ParamDef; 46] = [
+const PARAM_DEFS: [ParamDef; 47] = [
     ParamDef {
         #[cfg(feature = "vst3")]
         vst3_id: PARAM_MIX_NUM,
@@ -774,6 +774,22 @@ const PARAM_DEFS: [ParamDef; 46] = [
         default_value: crate::compressor_controls::DEFAULTS[18] as f64,
         flags: AUTO_ENUM,
     },
+    ParamDef {
+        #[cfg(feature = "vst3")]
+        vst3_id: 55,
+        id: ClapId::new(55),
+        name: crate::compressor_controls::NAMES[crate::compressor_controls::SMOOTH_INDEX],
+        #[cfg(feature = "vst3")]
+        short_name: "Env Smooth",
+        #[cfg(feature = "vst3")]
+        units: "ms",
+        module: "Compressor",
+        min_value: crate::compressor_controls::MIN[crate::compressor_controls::SMOOTH_INDEX] as f64,
+        max_value: crate::compressor_controls::MAX[crate::compressor_controls::SMOOTH_INDEX] as f64,
+        default_value: crate::compressor_controls::DEFAULTS
+            [crate::compressor_controls::SMOOTH_INDEX] as f64,
+        flags: AUTO,
+    },
 ];
 
 fn param_def_for_id(param_id: ClapId) -> Option<ParamDef> {
@@ -1206,6 +1222,7 @@ fn format_plain_value_text_impl(param_id: ClapId, value: f64) -> Option<String> 
             0 | 8 | 9 | 12 | 16 | 17 | 18 => if value >= 0.5 { "On" } else { "Off" }.to_owned(),
             1 | 5 | 6 | 10 => format!("{value:.1} dB"),
             2 | 3 => format!("{value:.2} ms"),
+            crate::compressor_controls::SMOOTH_INDEX => format!("{value:.1} ms"),
             4 => format!("{value:.1}:1"),
             7 | 11 => format!("{:.1}%", value * 100.0),
             13 => {

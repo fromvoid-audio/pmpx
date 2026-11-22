@@ -91,7 +91,7 @@ fn sync_division_options_append_long_cycle_choices() {
 
 #[test]
 fn sync_division_host_text_and_normalized_max_include_eight_bars() {
-    assert_eq!(super::param_count(), 46);
+    assert_eq!(super::param_count(), 47);
     assert_eq!(MAX_SYNC_DIVISION, 9.0);
     let flags = super::param_flags_for_index(3).expect("CLAP division metadata");
     assert!(flags.contains(ParamInfoFlags::IS_STEPPED));
@@ -118,7 +118,7 @@ fn sync_division_host_text_and_normalized_max_include_eight_bars() {
 #[test]
 fn depth_and_floor_are_stable_host_parameters_with_text_rules() {
     let params = PumpParams::new();
-    assert_eq!(super::param_count(), 46);
+    assert_eq!(super::param_count(), 47);
     assert_eq!(super::get_param_value(&params, PARAM_DEPTH_ID), Some(120.0));
     assert_eq!(super::get_param_value(&params, PARAM_FLOOR_ID), Some(-60.0));
 
@@ -198,7 +198,7 @@ fn depth_and_floor_are_stable_host_parameters_with_text_rules() {
 #[test]
 fn filter_host_parameters_have_stable_ranges_and_text_rules() {
     let params = PumpParams::new();
-    assert_eq!(super::param_count(), 46);
+    assert_eq!(super::param_count(), 47);
     let filter_flags = super::param_flags_for_index(13).expect("filter metadata should exist");
     assert!(filter_flags.contains(ParamInfoFlags::IS_AUTOMATABLE));
     assert!(filter_flags.contains(ParamInfoFlags::IS_STEPPED));
@@ -280,7 +280,7 @@ fn free_rate_clap_and_vst3_normalized_mapping_agree() {
 #[test]
 fn free_timing_parameters_use_stable_ids_and_lossless_units() {
     let params = PumpParams::new();
-    assert_eq!(super::param_count(), 46);
+    assert_eq!(super::param_count(), 47);
     assert_eq!(
         super::get_param_value(&params, super::PARAM_TIMING_MODE_ID),
         Some(0.0)
@@ -560,7 +560,7 @@ fn editor_closed_host_switch_preserves_active_side_curve_during_scalar_save() {
 
 #[test]
 fn bypass_metadata_is_appended_and_has_the_host_bypass_contract() {
-    assert_eq!(super::param_count(), 46);
+    assert_eq!(super::param_count(), 47);
     let flags = super::param_flags_for_index(7).expect("bypass metadata should exist");
     assert!(flags.contains(ParamInfoFlags::IS_AUTOMATABLE));
     assert!(flags.contains(ParamInfoFlags::IS_STEPPED));
@@ -1553,7 +1553,7 @@ fn vst3_gui_parameter_ids_follow_the_declared_vst3_parameter_table() {
 #[cfg(feature = "vst3")]
 #[test]
 fn vst3_metadata_appends_extended_division_without_shifting_existing_ids() {
-    assert_eq!(vst3_param_count(), 47);
+    assert_eq!(vst3_param_count(), 48);
     let ids = (0..vst3_param_count() as i32)
         .map(|index| {
             vst3_param_info_for_index(index)
@@ -1568,7 +1568,7 @@ fn vst3_metadata_appends_extended_division_without_shifting_existing_ids() {
             26, 27, 28, 29, 30
         ]
     );
-    assert_eq!(ids[28..], (36..=54).collect::<Vec<_>>());
+    assert_eq!(ids[28..], (36..=55).collect::<Vec<_>>());
     let mut sorted_ids = ids.clone();
     sorted_ids.sort_unstable();
     sorted_ids.dedup();
@@ -1768,12 +1768,14 @@ fn compressor_state_roundtrips_working_stored_sounds_and_presets() {
     params.set_compressor_control(0, 1.0);
     params.set_compressor_control(1, -31.0);
     params.set_compressor_control(2, 3.0);
+    params.set_compressor_control(crate::compressor_controls::SMOOTH_INDEX, 25.0);
     let a = params.compressor();
     assert!(params.store_active_sound_state());
     params.save_current_state_by_name("Compressor A").unwrap();
     params.set_active_sound(super::SoundSide::B);
     params.set_compressor_control(1, -12.0);
     params.set_compressor_control(9, 1.0);
+    params.set_compressor_control(crate::compressor_controls::SMOOTH_INDEX, 45.0);
     let b = params.compressor();
     let payload = encode_state_payload(&params);
     let restored = PumpParams::new();
@@ -1815,7 +1817,11 @@ fn compressor_host_parameters_roundtrip_and_preserve_reserved_ids() {
     for i in 0..crate::compressor_controls::COUNT {
         let id = toybox::clack_plugin::utils::ClapId::new(36 + i as u32);
         let params = PumpParams::new();
-        let value = crate::compressor_controls::DEFAULTS[i];
+        let value = if i == crate::compressor_controls::SMOOTH_INDEX {
+            25.0
+        } else {
+            crate::compressor_controls::DEFAULTS[i]
+        };
         super::apply_param_event(&params, id, value);
         assert_eq!(super::get_param_value(&params, id), Some(value as f64));
         let text = super::format_plain_value_text(id, value as f64).unwrap();

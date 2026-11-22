@@ -591,6 +591,7 @@ impl PumpEngine {
                 threshold_db: controls[1],
                 attack_ms: controls[2],
                 release_ms: controls[3],
+                smooth_ms: controls[crate::compressor_controls::SMOOTH_INDEX],
                 ratio: controls[4],
                 range_db: controls[5],
                 auto_release: controls[17] >= 0.5,

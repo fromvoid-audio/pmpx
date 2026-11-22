@@ -7,7 +7,7 @@
 use super::*;
 
 pub(crate) const STATE_MAGIC: &[u8; 4] = b"PMP2";
-pub(crate) const STATE_VERSION: u32 = 23;
+pub(crate) const STATE_VERSION: u32 = 24;
 pub(super) const BEZIER_METADATA_MAGIC: u32 = u32::from_le_bytes(*b"BEZR");
 
 /// The two independently editable Pump sound sides.

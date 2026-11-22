@@ -1,17 +1,19 @@
 //! Stable compressor control ranges shared by state, host parameters, and DSP.
 
-pub(crate) const COUNT: usize = 19;
+pub(crate) const LEGACY_COUNT: usize = 19;
+pub(crate) const SMOOTH_INDEX: usize = LEGACY_COUNT;
+pub(crate) const COUNT: usize = SMOOTH_INDEX + 1;
 pub(crate) const DEFAULTS: [f32; COUNT] = [
     0.0, -20.0, 10.0, 100.0, 4.0, 60.0, 0.0, 1.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 1_000.0, 0.707,
-    0.0, 0.0, 0.0,
+    0.0, 0.0, 0.0, 0.0,
 ];
 pub(crate) const MIN: [f32; COUNT] = [
     0.0, -60.0, 0.01, 10.0, 1.0, 0.0, 0.0, 0.0, 0.0, 0.0, -60.0, 0.0, 0.0, 0.0, 20.0, 0.25, 0.0,
-    0.0, 0.0,
+    0.0, 0.0, 0.0,
 ];
 pub(crate) const MAX: [f32; COUNT] = [
     1.0, 0.0, 100.0, 3_000.0, 10.0, 60.0, 20.0, 1.0, 1.0, 1.0, 24.0, 1.0, 1.0, 4.0, 20_000.0, 4.0,
-    1.0, 1.0, 1.0,
+    1.0, 1.0, 1.0, 100.0,
 ];
 
 pub(crate) const NAMES: [&str; COUNT] = [
@@ -34,6 +36,7 @@ pub(crate) const NAMES: [&str; COUNT] = [
     "Sidechain Listen",
     "Auto Release",
     "Oversampling",
+    "Envelope Smooth",
 ];
 
 pub(crate) fn stepped(index: usize) -> bool {

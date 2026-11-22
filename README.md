@@ -121,6 +121,10 @@ Pump's sidechain input in your DAW. The compressor also offers automatic
 release, soft clipping and a lightweight 2× oversampling option. This is Pump's
 own compressor, not a model of Ableton's Glue Compressor.
 
+The compressor’s Smooth knob adds up to 100 ms of smoothing to its gain
+envelope. You can hear the change and see it in the live curve before capture.
+The setting defaults to 0 ms.
+
 Turn on the waveform row’s SIDECHAIN button to overlay the routed input in
 blue on the track waveform. The overlay follows the same Sync/Live display
 mode and can be shown with the compressor off.

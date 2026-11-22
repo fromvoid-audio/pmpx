@@ -916,7 +916,7 @@ mod macos {
             pump::gui_gpui::screenshot_bounds("curve-plot"),
             [x, y, w, h]
         );
-        for index in 0..19 {
+        for index in 0..20 {
             let key = format!("compressor-{index}");
             wait_for_control(app, &gui, &key);
             let [x, y, w, h] = pump::gui_gpui::screenshot_bounds(&key);
@@ -965,6 +965,11 @@ mod macos {
             params.compressor()[1] > before_threshold,
             "compressor threshold must track native drag"
         );
+        let (x, y) = center("compressor-19");
+        send_mouse_down(fixture.window, x, y, 0);
+        send_mouse_dragged(fixture.window, x, y - 36.0, 0);
+        send_mouse_up(fixture.window, x, y - 36.0, 0);
+        assert!((params.compressor()[19] - 30.0).abs() < 0.01);
         params.set_delay_beats(0.0);
         let previous_curve = params.editable_curve_snapshot();
         click_control(fixture, "compressor-capture", 0);

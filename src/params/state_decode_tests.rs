@@ -983,10 +983,10 @@ fn decode_rejects_nonfinite_v14_ab_scalar_without_mutating_state() {
 // Existing migration fixtures intentionally start at v20, then remove fields
 // to represent each historical wire format. Keep their byte offsets stable.
 fn effect_record_offsets(payload: &[u8]) -> Vec<usize> {
-    let compressor_bytes = if read_u32(payload, 4) >= 23 {
-        crate::compressor_controls::COUNT * 4
-    } else {
-        0
+    let compressor_bytes = 4 * match read_u32(payload, 4) {
+        ..=22 => 0,
+        23 => crate::compressor_controls::LEGACY_COUNT,
+        _ => crate::compressor_controls::COUNT,
     };
     let mut offset = skip_encoded_curve(payload, 32, true) + 8;
     let count = read_u32(payload, offset - 4) as usize;
@@ -1076,6 +1076,42 @@ fn v21_spectral_state_migrates_all_dual_records_and_rejects_invalid_removed_data
     old.truncate(last);
     assert!(decode_state_payload(&restored, &old).is_err());
     assert_eq!(encode_current_state_payload(&restored), before);
+}
+
+#[test]
+fn v23_state_defaults_smoothing_and_preserves_existing_compressor_controls() {
+    let source = PumpParams::new();
+    let index = crate::compressor_controls::SMOOTH_INDEX;
+    source.set_compressor_control(0, 1.0);
+    source.set_compressor_control(1, -31.0);
+    source.set_compressor_control(index, 35.0);
+    assert!(source.store_active_sound_state());
+    let mut bank = source.preset_bank_snapshot();
+    bank.presets[0].compressor = source.compressor();
+    source.set_preset_bank_without_persistence(bank);
+
+    let mut payload = encode_current_state_payload(&source);
+    for start in effect_record_offsets(&payload).into_iter().rev() {
+        let smooth = start + 28 + index * 4;
+        payload.drain(smooth..smooth + 4);
+    }
+    write_u32(&mut payload, 4, 23);
+
+    let restored = PumpParams::new();
+    decode_state_payload(&restored, &payload).unwrap();
+    let mut expected = source.compressor();
+    expected[index] = 0.0;
+    assert_eq!(restored.compressor(), expected);
+    assert_eq!(
+        restored
+            .stored_sound_state_snapshot(super::SoundSide::A)
+            .compressor,
+        expected
+    );
+    assert_eq!(
+        restored.preset_bank_snapshot().presets[0].compressor,
+        expected
+    );
 }
 
 #[test]

@@ -121,10 +121,11 @@ const COMPRESSOR_CONTROL_IDS: [&str; crate::compressor_controls::COUNT] = [
     "compressor-16",
     "compressor-17",
     "compressor-18",
+    "compressor-19",
 ];
 const COMPRESSOR_SHORT_LABELS: [&str; crate::compressor_controls::COUNT] = [
     "ENABLE", "THRESH", "ATTACK", "RELEASE", "RATIO", "RANGE", "MAKEUP", "MIX", "CLIP", "EXT",
-    "GAIN", "MIX", "EQ", "FILTER", "FREQ", "Q", "LISTEN", "AUTO", "2×",
+    "GAIN", "MIX", "EQ", "FILTER", "FREQ", "Q", "LISTEN", "AUTO", "2×", "SMOOTH",
 ];
 
 const TIMING_FREE_RATE_IDS: [&str; 4] = [
@@ -5742,13 +5743,12 @@ impl PumpEditor {
                             .children(controls(&[4, 2, 3])),
                     ),
             )
-            .child(
-                div()
-                    .h(px(46.))
-                    .flex_shrink_0()
-                    .flex()
-                    .children(controls(&[5, 6, 7])),
-            )
+            .child(div().h(px(46.)).flex_shrink_0().flex().children(controls(&[
+                5,
+                6,
+                7,
+                crate::compressor_controls::SMOOTH_INDEX,
+            ])))
             .child(
                 div()
                     .h(px(18.))
