@@ -1038,13 +1038,13 @@ fn editor_view_accepts_width_only_resize_within_its_size_limits() {
     let mut rect = ViewRect {
         left: 12,
         top: 18,
-        right: 12 + 1_232,
+        right: 12 + 1_120,
         bottom: 18 + 400,
     };
     assert_eq!(unsafe { view.checkSizeConstraint(&mut rect) }, kResultOk);
     assert_eq!(unsafe { view.onSize(&mut rect) }, kResultOk);
     assert_eq!((rect.left, rect.top), (12, 18));
-    assert_eq!(rect.right - rect.left, 1_232);
+    assert_eq!(rect.right - rect.left, 1_120);
     assert_eq!(rect.bottom - rect.top, 400);
 
     let mut minimum = view_rect(10, 10);

@@ -28,10 +28,8 @@ pub const WINDOW_HEIGHT: u32 = 400;
 /// Maximum supported logical editor size.
 pub const MAX_WINDOW_WIDTH: u32 = 1280;
 pub const MAX_WINDOW_HEIGHT: u32 = 800;
-pub(crate) const COMPRESSOR_PANEL_WIDTH: u32 = 336;
-pub(crate) const FILTER_PANEL_WIDTH: u32 = 256;
-pub(crate) const MAX_EXPANDED_WIDTH: u32 =
-    MAX_WINDOW_WIDTH + COMPRESSOR_PANEL_WIDTH + FILTER_PANEL_WIDTH;
+pub(crate) const SIDE_PANEL_WIDTH: u32 = 240;
+pub(crate) const MAX_EXPANDED_WIDTH: u32 = MAX_WINDOW_WIDTH + 2 * SIDE_PANEL_WIDTH;
 
 const PRESET_WARNING_STORAGE: &str = "NOT SAVED - CHECK PRESET FOLDER";
 

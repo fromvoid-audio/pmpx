@@ -41,7 +41,7 @@ use super::model::{
 use super::visual_system::{
     pump_meter_colors, pump_theme, PumpColor, PUMP_TYPOGRAPHY, PUMP_VISUAL_METRICS,
 };
-use super::{COMPRESSOR_PANEL_WIDTH, FILTER_PANEL_WIDTH};
+use super::SIDE_PANEL_WIDTH;
 
 /// Preferred logical editor width.
 pub const WINDOW_WIDTH: u32 = super::WINDOW_WIDTH;
@@ -122,25 +122,8 @@ const COMPRESSOR_CONTROL_IDS: [&str; crate::compressor_controls::COUNT] = [
     "compressor-18",
 ];
 const COMPRESSOR_SHORT_LABELS: [&str; crate::compressor_controls::COUNT] = [
-    "ENABLE",
-    "THRESHOLD",
-    "ATTACK",
-    "RELEASE",
-    "RATIO",
-    "RANGE",
-    "MAKEUP",
-    "MIX",
-    "CLIP",
-    "EXT",
-    "GAIN",
-    "MIX",
-    "EQ",
-    "FILTER",
-    "FREQ",
-    "Q",
-    "LISTEN",
-    "AUTO",
-    "2×",
+    "ENABLE", "THRESH", "ATTACK", "RELEASE", "RATIO", "RANGE", "MAKEUP", "MIX", "CLIP", "EXT",
+    "GAIN", "MIX", "EQ", "FILTER", "FREQ", "Q", "LISTEN", "AUTO", "2×",
 ];
 
 const TIMING_FREE_RATE_IDS: [&str; 4] = [
@@ -1611,12 +1594,12 @@ impl PumpEditor {
     fn panel_widths(&self) -> (u32, u32) {
         (
             if self.compressor_panel_open {
-                COMPRESSOR_PANEL_WIDTH
+                SIDE_PANEL_WIDTH
             } else {
                 0
             },
             if self.filter_panel_open {
-                FILTER_PANEL_WIDTH
+                SIDE_PANEL_WIDTH
             } else {
                 0
             },
@@ -5499,24 +5482,14 @@ impl PumpEditor {
     }
 
     fn panel_shell(&self, panel: EditorPanel, cx: &Context<Self>) -> gpui::Stateful<gpui::Div> {
-        let (id, title, close_id, width) = match panel {
-            EditorPanel::Compressor => (
-                "compressor-drawer",
-                "COMPRESSOR",
-                "close-compressor",
-                COMPRESSOR_PANEL_WIDTH,
-            ),
-            EditorPanel::Filter => (
-                "filter-drawer",
-                "FILTER",
-                "close-filter",
-                FILTER_PANEL_WIDTH,
-            ),
+        let (id, title, close_id) = match panel {
+            EditorPanel::Compressor => ("compressor-drawer", "COMPRESSOR", "close-compressor"),
+            EditorPanel::Filter => ("filter-drawer", "FILTER", "close-filter"),
         };
         let theme = pump_theme();
         div()
             .id(id)
-            .w(px(width as f32))
+            .w(px(SIDE_PANEL_WIDTH as f32))
             .h_full()
             .flex_shrink_0()
             .flex()
@@ -5646,7 +5619,7 @@ impl PumpEditor {
                 div()
                     .flex()
                     .items_center()
-                    .gap(px(8.))
+                    .gap(px(4.))
                     .h(px(108.))
                     .flex_shrink_0()
                     .border_1()
@@ -5655,19 +5628,19 @@ impl PumpEditor {
                     .child(
                         self.compressor_control(1, values[1], cx)
                             .flex_none()
-                            .w(px(58.)),
+                            .w(px(47.)),
                     )
                     .child(
                         div()
-                            .w(px(52.))
+                            .w(px(30.))
                             .flex_shrink_0()
                             .flex()
                             .flex_col()
                             .items_center()
                             .gap(px(2.))
-                            .child(group_heading("GR"))
+                            .child(group_heading("GR dB"))
                             .child(meter)
-                            .child(div().text_size(px(9.)).child(format!("{reduction:.1} dB"))),
+                            .child(div().text_size(px(9.)).child(format!("{reduction:.1}"))),
                     )
                     .child(
                         div()
@@ -5714,7 +5687,11 @@ impl PumpEditor {
     ) -> gpui::Stateful<gpui::Div> {
         let id = COMPRESSOR_CONTROL_IDS[index];
         let parameter = toybox::clack_plugin::utils::ClapId::new(36 + index as u32);
-        let text = format_plain_value_text(parameter, f64::from(value)).unwrap_or_default();
+        let text = match index {
+            3 if value >= 1_000.0 => format!("{:.2} s", value / 1_000.0),
+            2 | 3 if value >= 1.0 => format!("{value:.1} ms"),
+            _ => format_plain_value_text(parameter, f64::from(value)).unwrap_or_default(),
+        };
         let focus = self.button_focus_handle(id).clone();
         let focus_down = focus.clone();
         let label = COMPRESSOR_SHORT_LABELS[index];
@@ -5761,7 +5738,7 @@ impl PumpEditor {
                 .flex_col()
                 .justify_center()
                 .items_center()
-                .text_size(px(9.0))
+                .text_size(px(if matches!(index, 2..=4) { 8.0 } else { 9.0 }))
                 .line_height(px(10.0))
                 .focus(|style| style.border_b_1().border_color(solid(theme.text_primary)))
                 .child(div().text_color(solid(theme.text_muted)).child(label))

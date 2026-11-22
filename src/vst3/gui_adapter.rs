@@ -382,7 +382,7 @@ mod tests {
         // The native fixture tests attachment and layout. Here the frame
         // synchronously calls back into the real IPlugView just as a host can.
         target.attached.set(true);
-        for width in [896, 1232, 976, 640] {
+        for width in [880, 1120, 880, 640] {
             assert!(matches!(
                 target.request(width, 400),
                 ResizeDisposition::HostWillResize
@@ -393,7 +393,7 @@ mod tests {
         }
         accepts_resize.set(false);
         assert!(matches!(
-            target.request(896, 400),
+            target.request(880, 400),
             ResizeDisposition::Rejected
         ));
         let mut rect = view_rect(0, 0);
@@ -401,7 +401,7 @@ mod tests {
         assert_eq!((rect.right, rect.bottom), (640, 400));
         assert_eq!(unsafe { view.setFrame(ptr::null_mut()) }, kResultOk);
         assert!(matches!(
-            target.request(896, 400),
+            target.request(880, 400),
             ResizeDisposition::Rejected
         ));
     }

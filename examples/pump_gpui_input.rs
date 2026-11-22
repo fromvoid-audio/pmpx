@@ -17,6 +17,7 @@ mod macos {
 
     const OUTPUT_WIDTH: u32 = WINDOW_WIDTH;
     const OUTPUT_HEIGHT: u32 = WINDOW_HEIGHT;
+    const PANEL_WIDTH: u32 = 240;
     const COMMAND: u64 = 1_u64 << 20;
     const SHIFT: u64 = 1_u64 << 17;
 
@@ -809,7 +810,7 @@ mod macos {
         let base_plot = pump::gui_gpui::screenshot_bounds("curve-plot");
         click_control(fixture, "filter-panel", 0);
         pump_appkit(app, &gui, 0.06);
-        fixture.sync_host_size(OUTPUT_WIDTH + 256);
+        fixture.sync_host_size(OUTPUT_WIDTH + PANEL_WIDTH);
         assert_eq!(pump::gui_gpui::screenshot_bounds("curve-plot"), base_plot);
         let [frequency_x, _, _, _] = pump::gui_gpui::screenshot_bounds("frequency-plot");
         assert!(frequency_x >= OUTPUT_WIDTH as f32);
@@ -886,13 +887,13 @@ mod macos {
         // shifts to make room on the left.
         click_control(fixture, "compressor-panel", 0);
         pump_appkit(app, &gui, 0.06);
-        fixture.sync_host_size(OUTPUT_WIDTH + 336 + 256);
+        fixture.sync_host_size(OUTPUT_WIDTH + 2 * PANEL_WIDTH);
         let [x, y, w, h] = pump::gui_gpui::screenshot_bounds("curve-plot");
-        assert!((x - (base_plot[0] + 336.)).abs() < 0.01);
+        assert!((x - (base_plot[0] + PANEL_WIDTH as f32)).abs() < 0.01);
         assert_eq!([y, w, h], base_plot[1..]);
         click_control(fixture, "close-filter", 0);
         pump_appkit(app, &gui, 0.06);
-        fixture.sync_host_size(OUTPUT_WIDTH + 336);
+        fixture.sync_host_size(OUTPUT_WIDTH + PANEL_WIDTH);
         assert_eq!(
             pump::gui_gpui::screenshot_bounds("curve-plot"),
             [x, y, w, h]
@@ -906,7 +907,7 @@ mod macos {
                     && y >= 0.
                     && w > 0.
                     && h > 0.
-                    && x + w <= 336.
+                    && x + w <= PANEL_WIDTH as f32
                     && y + h <= OUTPUT_HEIGHT as f32,
                 "{key} outside editor: {x},{y},{w},{h}"
             );

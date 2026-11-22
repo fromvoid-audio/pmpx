@@ -381,13 +381,13 @@ mod macos {
             );
             pump_appkit(app, &gui, 0.06);
             let expanded_width = fixture.sync_host_size();
-            assert_eq!(expanded_width, 1232);
+            assert_eq!(expanded_width, 1120);
             capture(
                 app,
                 &fixture,
                 &gui,
                 &root,
-                "pump-panels-1232x400",
+                "pump-panels-1120x400",
                 expanded_width,
                 400,
             );
@@ -401,7 +401,7 @@ mod macos {
             );
             pump_appkit(app, &gui, 0.06);
             let expanded_width = fixture.sync_host_size();
-            assert_eq!(expanded_width, 896);
+            assert_eq!(expanded_width, 880);
 
             params.set_filter_enabled(1.0);
             params.set_filter_hp_freq_hz(320.0);
@@ -415,7 +415,7 @@ mod macos {
                 &fixture,
                 &gui,
                 &root,
-                "pump-filter-enabled-896x400",
+                "pump-filter-enabled-880x400",
                 expanded_width,
                 400,
             );
