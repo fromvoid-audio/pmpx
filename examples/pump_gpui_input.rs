@@ -811,6 +811,9 @@ mod macos {
         );
         send_key(app, fixture.window, &gui, "\u{f700}", 126, 0);
 
+        assert!(center("compressor-panel").0 < center("waveform-mode").0);
+        assert!(center("filter-panel").0 > center("bypass").0);
+        assert!(pump::gui_gpui::screenshot_bounds_if_painted("compressor-capture").is_none());
         let base_plot = pump::gui_gpui::screenshot_bounds("curve-plot");
         click_control(fixture, "filter-panel", 0);
         pump_appkit(app, &gui, 0.06);
@@ -978,6 +981,11 @@ mod macos {
         assert!((params.compressor()[19] - 30.0).abs() < 0.01);
         params.set_delay_beats(0.0);
         let previous_curve = params.editable_curve_snapshot();
+        let [x, _, w, _] = pump::gui_gpui::screenshot_bounds("compressor-capture");
+        assert!(
+            x + w <= PANEL_WIDTH as f32,
+            "Capture belongs in the compressor drawer"
+        );
         click_control(fixture, "compressor-capture", 0);
         pump_appkit(app, &gui, 0.04);
         assert!(pump::gui_gpui::complete_screenshot_compressor_capture(

@@ -1236,7 +1236,6 @@ struct PumpEditor {
     resize: ResizeRequester,
     resize_task: Option<gpui::Task<()>>,
     compressor_hover: Option<usize>,
-    capture_hovered: bool,
     last_pointer: Option<Point<Pixels>>,
     button_focus_handles: HashMap<&'static str, FocusHandle>,
     button_activation_keys: HashSet<String>,
@@ -1427,7 +1426,6 @@ impl PumpEditor {
             resize,
             resize_task: None,
             compressor_hover: None,
-            capture_hovered: false,
             last_pointer: None,
             button_focus_handles,
             button_activation_keys: HashSet::new(),
@@ -5169,6 +5167,24 @@ fn icon_button(
     button(id, String::new(), active, width, focus_handle).child(icon)
 }
 
+struct PanelTooltip(&'static str);
+
+impl Render for PanelTooltip {
+    fn render(&mut self, _: &mut Window, _: &mut Context<Self>) -> impl gpui::IntoElement {
+        let theme = pump_theme();
+        div()
+            .px(px(6.0))
+            .py(px(4.0))
+            .bg(solid(theme.surface_overlay))
+            .border_1()
+            .border_color(solid(theme.border))
+            .text_color(solid(theme.text_primary))
+            .font(font("Ioskeley Mono"))
+            .text_size(px(10.0))
+            .child(self.0)
+    }
+}
+
 impl PumpEditor {
     fn slider_element(
         &self,
@@ -5582,6 +5598,95 @@ impl PumpEditor {
             }))
     }
 
+    fn panel_toggle(&self, panel: EditorPanel, cx: &Context<Self>) -> gpui::Stateful<gpui::Div> {
+        let (id, open, active, outward, label) = match panel {
+            EditorPanel::Compressor => (
+                "compressor-panel",
+                self.compressor_panel_open,
+                self.compressor_panel_open || self.state.borrow().params().compressor()[0] >= 0.5,
+                -1.0,
+                if self.compressor_panel_open {
+                    "Close compressor"
+                } else {
+                    "Open compressor"
+                },
+            ),
+            EditorPanel::Filter => (
+                "filter-panel",
+                self.filter_panel_open,
+                self.filter_panel_open,
+                1.0,
+                if self.filter_panel_open {
+                    "Close filter"
+                } else {
+                    "Open filter"
+                },
+            ),
+        };
+        let theme = pump_theme();
+        let icon = canvas(
+            |_, _, _| {},
+            move |bounds, _, window, _| {
+                let center = bounds.center();
+                let axis = |x, y| point(center.x + px(x), center.y + px(y));
+                let arrow = if open { -outward } else { outward };
+                let edge = outward * 11.0;
+                let mut path = gpui::PathBuilder::stroke(px(1.25));
+                path.move_to(axis(edge - 2.0 * arrow, -3.7));
+                path.line_to(axis(edge + 2.0 * arrow, 0.0));
+                path.line_to(axis(edge - 2.0 * arrow, 3.7));
+
+                let glyph = -outward * 5.0;
+                match panel {
+                    EditorPanel::Compressor => {
+                        path.move_to(axis(glyph - 6.0, 4.5));
+                        path.line_to(axis(glyph, -1.0));
+                        path.line_to(axis(glyph + 6.0, -3.5));
+                    }
+                    EditorPanel::Filter => {
+                        path.move_to(axis(glyph - 6.0, -3.2));
+                        path.line_to(axis(glyph - 1.0, -3.2));
+                        path.cubic_bezier_to(
+                            axis(glyph + 6.0, 4.5),
+                            axis(glyph + 3.3, -3.2),
+                            axis(glyph + 2.0, 4.5),
+                        );
+                    }
+                }
+                if let Ok(path) = path.build() {
+                    window.paint_path(
+                        path,
+                        solid(if active {
+                            theme.accent_copper
+                        } else {
+                            theme.text_primary
+                        }),
+                    );
+                }
+            },
+        )
+        .size_full();
+        button(
+            id,
+            String::new(),
+            active,
+            40.,
+            Some(self.button_focus_handle(id)),
+        )
+        .h(px(FOOTER_HEIGHT))
+        .flex_shrink_0()
+        .aria_label(label)
+        .tooltip(move |_, cx| cx.new(|_| PanelTooltip(label)).into())
+        .child(icon)
+        .on_click(
+            cx.listener(move |view, event: &gpui::ClickEvent, window, cx| {
+                if !event.is_keyboard() {
+                    view.toggle_panel(panel, window, cx);
+                }
+            }),
+        )
+    }
+
     fn panel_shell(&self, panel: EditorPanel, cx: &Context<Self>) -> gpui::Stateful<gpui::Div> {
         let (id, title, close_id) = match panel {
             EditorPanel::Compressor => ("compressor-drawer", "COMPRESSOR", "close-compressor"),
@@ -5796,6 +5901,69 @@ impl PumpEditor {
                     .flex_shrink_0()
                     .flex()
                     .children(controls(&[10, 11, 14, 15])),
+            )
+            .child(self.compressor_capture_row(cx))
+    }
+
+    fn compressor_capture_row(&self, cx: &Context<Self>) -> gpui::Div {
+        let state = self.state.borrow();
+        let pending = state.capture_pending();
+        let status = if pending {
+            if !state.status().has_host_beats_timeline() {
+                "Waiting for host timing"
+            } else if !state.status().is_playing() {
+                "Start playback"
+            } else {
+                "Capturing one cycle"
+            }
+            .to_owned()
+        } else if let Some(error) = state.capture_error() {
+            error.to_owned()
+        } else {
+            self.compressor_hover
+                .map(|index| {
+                    format!(
+                        "{} • {}",
+                        crate::compressor_controls::NAMES[index],
+                        if crate::compressor_controls::stepped(index) {
+                            "click or use arrows"
+                        } else {
+                            "drag or use arrows"
+                        }
+                    )
+                })
+                .unwrap_or_default()
+        };
+        let capture = button(
+            "compressor-capture",
+            if pending { "CANCEL" } else { "CAPTURE" }.into(),
+            pending,
+            72.0,
+            Some(self.button_focus_handle("compressor-capture")),
+        )
+        .h(px(22.0))
+        .flex_shrink_0()
+        .on_click(cx.listener(|view, event: &gpui::ClickEvent, window, cx| {
+            if !event.is_keyboard() {
+                view.activate_focused_button("compressor-capture", window, cx);
+            }
+        }));
+        div()
+            .mt_auto()
+            .h(px(38.0))
+            .flex_shrink_0()
+            .flex()
+            .items_center()
+            .gap(px(8.0))
+            .border_t_1()
+            .border_color(solid(pump_theme().border))
+            .child(capture)
+            .child(
+                div()
+                    .text_size(px(8.0))
+                    .line_height(px(10.0))
+                    .text_color(solid(pump_theme().text_muted))
+                    .child(status),
             )
     }
 
@@ -6651,102 +6819,13 @@ impl Render for PumpEditor {
         bypass_button =
             bypass_button.child(div().child(if bypassed { "BYPASSED" } else { "ACTIVE" }));
         bypass_button = bypass_button.on_click(cx.listener(Self::toggle_bypass));
-        let panel_button = |id, label: &str, active, panel| {
-            button(
-                id,
-                label.into(),
-                active,
-                65.,
-                Some(self.button_focus_handle(id)),
-            )
-            .h(px(FOOTER_HEIGHT))
-            .on_click(cx.listener(
-                move |view, event: &gpui::ClickEvent, window, cx| {
-                    if !event.is_keyboard() {
-                        view.toggle_panel(panel, window, cx);
-                    }
-                },
-            ))
-        };
-        let compressor_panel = panel_button(
-            "compressor-panel",
-            if self.compressor_panel_open {
-                "› COMP"
-            } else {
-                "‹ COMP"
-            },
-            self.compressor_panel_open || params.compressor()[0] >= 0.5,
-            EditorPanel::Compressor,
-        );
-        let filter_panel = panel_button(
-            "filter-panel",
-            if self.filter_panel_open {
-                "FILTER ‹"
-            } else {
-                "FILTER ›"
-            },
-            self.filter_panel_open,
-            EditorPanel::Filter,
-        );
-        let capture_pending = state.capture_pending();
-        let compressor_capture = button(
-            "compressor-capture",
-            if capture_pending { "CANCEL" } else { "CAPTURE" }.into(),
-            capture_pending,
-            72.0,
-            Some(self.button_focus_handle("compressor-capture")),
-        )
-        .h(px(FOOTER_HEIGHT))
-        .on_hover(cx.listener(|view, hovered: &bool, _, cx| {
-            view.capture_hovered = *hovered;
-            cx.notify();
-        }))
-        .on_click(cx.listener(|view, event: &gpui::ClickEvent, _, cx| {
-            if !event.is_keyboard() {
-                let message = if view.state.borrow().capture_pending() {
-                    EditorMessage::CancelCompressorCapture
-                } else {
-                    EditorMessage::CaptureCompressor
-                };
-                view.dispatch(message, cx);
-            }
-        }));
-        let capture_status = if capture_pending {
-            if !state.status().has_host_beats_timeline() {
-                "Waiting for host beat timeline"
-            } else if !state.status().is_playing() {
-                "Start playback to capture"
-            } else {
-                "Capturing one cycle"
-            }
-        } else {
-            state.capture_message().unwrap_or("")
-        }
-        .to_owned();
-        let capture_message = if capture_pending || self.capture_hovered {
-            capture_status
-        } else {
-            self.compressor_hover
-                .filter(|_| self.compressor_panel_open)
-                .map(|index| {
-                    format!(
-                        "{} • {}",
-                        crate::compressor_controls::NAMES[index],
-                        if crate::compressor_controls::stepped(index) {
-                            "click or use arrows"
-                        } else {
-                            "drag or use arrows"
-                        }
-                    )
-                })
-                .unwrap_or_default()
-        };
         let footer = div()
             .h(px(FOOTER_HEIGHT))
             .w_full()
             .flex()
             .items_center()
             .justify_between()
+            .child(self.panel_toggle(EditorPanel::Compressor, cx))
             .child(
                 div()
                     .flex()
@@ -6760,26 +6839,9 @@ impl Render for PumpEditor {
             .child(
                 div()
                     .flex()
-                    .items_center()
-                    .gap(px(4.0))
-                    .min_w(px(0.0))
-                    .child(compressor_panel.flex_shrink_0())
-                    .child(compressor_capture.flex_shrink_0())
-                    .child(
-                        div()
-                            .min_w(px(0.0))
-                            .truncate()
-                            .text_size(px(8.0))
-                            .text_color(solid(theme.text_muted))
-                            .child(capture_message),
-                    ),
-            )
-            .child(
-                div()
-                    .flex()
                     .gap(px(4.))
-                    .child(filter_panel)
-                    .child(bypass_button),
+                    .child(bypass_button)
+                    .child(self.panel_toggle(EditorPanel::Filter, cx)),
             );
         let hotkey_help = if state.hotkey_help_open() {
             const ROWS: [(&str, &str); 10] = [

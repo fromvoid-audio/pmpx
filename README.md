@@ -131,10 +131,11 @@ mode and can be shown with the compressor off.
 
 While compression is active, the coral gain curve updates live in the plot.
 To freeze it, choose Sync with Delay at zero, turn detector listen and bypass off, start host
-playback, then press `CAPTURE`. Pump waits for the next cycle boundary and
+playback, then press `CAPTURE` in the compressor panel. Pump waits for the next cycle boundary and
 records one full cycle. It turns compression off and replaces the drawn curve
-with a Bézier envelope of at most 12 editable points. The fit merges closely
-spaced points on a fast attack and removes redundant points along the release.
+with an editable Bézier envelope. The fitter tries the smallest curves first
+and uses wider handles to shape the attack and release. Complex changes can
+use up to 12 editable points.
 Capture accounts for Pump's Mix and adjusts Depth, Floor, Smooth, Mix and, when needed for makeup
 gain, Output Gain. Undo restores the previous settings and curve. Capture
 needs a host beat timeline.

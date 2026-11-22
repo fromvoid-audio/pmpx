@@ -966,7 +966,7 @@ pub(crate) struct PumpEditorState {
     undo_history: Vec<HistorySnapshot>,
     redo_history: Vec<HistorySnapshot>,
     pending_capture: Option<(u64, SoundSide, u32)>,
-    capture_message: Option<String>,
+    capture_error: Option<&'static str>,
 }
 
 #[derive(Clone)]
@@ -1116,7 +1116,7 @@ impl PumpEditorState {
             undo_history: Vec::new(),
             redo_history: Vec::new(),
             pending_capture: None,
-            capture_message: None,
+            capture_error: None,
         }
     }
 
@@ -1334,14 +1334,14 @@ impl PumpEditorState {
         self.pending_capture.is_some()
     }
 
-    pub(crate) fn capture_message(&self) -> Option<&str> {
-        self.capture_message.as_deref()
+    pub(crate) fn capture_error(&self) -> Option<&str> {
+        self.capture_error
     }
 
-    fn cancel_compressor_capture(&mut self, message: &str) {
+    fn cancel_compressor_capture(&mut self, error: Option<&'static str>) {
         self.status.compressor_capture_exchange().cancel();
         self.pending_capture = None;
-        self.capture_message = Some(message.to_owned());
+        self.capture_error = error;
     }
 
     fn finish_compressor_capture(&mut self) -> bool {
@@ -1356,12 +1356,12 @@ impl PumpEditorState {
             || self.params.timing_mode() != TIMING_MODE_SYNC
             || self.params.bypassed()
         {
-            self.cancel_compressor_capture("Capture cancelled: sound or curve changed");
+            self.cancel_compressor_capture(Some("Capture cancelled: sound or curve changed"));
             return true;
         }
         let exchange = self.status.compressor_capture_exchange();
         if exchange.current_request() != request {
-            self.cancel_compressor_capture("Capture cancelled");
+            self.cancel_compressor_capture(None);
             return true;
         }
         let Some(mut points) = exchange.snapshot() else {
@@ -1370,11 +1370,11 @@ impl PumpEditorState {
         let scale = points.iter().copied().fold(1.0_f32, f32::max);
         let target_output = self.params.output_gain_db() + 20.0 * scale.log10();
         if scale > 1.000_001 && (self.params.filter_enabled() || self.params.effects()[0] >= 0.5) {
-            self.cancel_compressor_capture("Reduce makeup before capturing band processing");
+            self.cancel_compressor_capture(Some("Reduce makeup before capturing band processing"));
             return true;
         }
         if target_output > MAX_OUTPUT_GAIN_DB {
-            self.cancel_compressor_capture("Reduce makeup or output before capture");
+            self.cancel_compressor_capture(Some("Reduce makeup or output before capture"));
             return true;
         }
         for point in &mut points {
@@ -1404,7 +1404,7 @@ impl PumpEditorState {
                 if changed {
                     self.push_history_snapshot(before);
                 }
-                self.cancel_compressor_capture("Capture could not update host parameters");
+                self.cancel_compressor_capture(Some("Capture could not update host parameters"));
                 return true;
             }
             if id == PARAM_DEPTH_ID {
@@ -1427,19 +1427,14 @@ impl PumpEditorState {
             if changed {
                 self.push_history_snapshot(before);
             }
-            self.cancel_compressor_capture("Capture could not turn off compression");
+            self.cancel_compressor_capture(Some("Capture could not turn off compression"));
             return true;
         }
         self.push_history_snapshot(before);
         self.params.set_editable_curve(&curve);
         self.params.set_compressor_control(0, 0.0);
         self.clear_curve_selection();
-        let clipped = self.params.compressor()[8] >= 0.5;
-        self.cancel_compressor_capture(if clipped {
-            "Curve captured; clipping is not captured"
-        } else {
-            "Captured curve is ready to edit"
-        });
+        self.cancel_compressor_capture(None);
         true
     }
 
@@ -1895,15 +1890,15 @@ fn reduce_editor_message(state: &mut PumpEditorState, message: EditorMessage) {
         EditorMessage::ToggleSidechainWaveform => state.status.toggle_sidechain_waveform(),
         EditorMessage::CaptureCompressor => {
             if state.params.compressor()[0] < 0.5 {
-                state.capture_message = Some("Enable compression to capture".to_owned());
+                state.capture_error = Some("Enable compression to capture");
             } else if state.params.timing_mode() != TIMING_MODE_SYNC {
-                state.capture_message = Some("Select Sync to capture one cycle".to_owned());
+                state.capture_error = Some("Select Sync to capture one cycle");
             } else if state.params.bypassed() {
-                state.capture_message = Some("Turn off bypass to capture".to_owned());
+                state.capture_error = Some("Turn off bypass to capture");
             } else if state.params.compressor()[16] >= 0.5 {
-                state.capture_message = Some("Turn off sidechain listen to capture".to_owned());
+                state.capture_error = Some("Turn off sidechain listen to capture");
             } else if state.params.delay_beats() != 0 {
-                state.capture_message = Some("Set Delay to zero to capture".to_owned());
+                state.capture_error = Some("Set Delay to zero to capture");
             } else {
                 let request = state.status.compressor_capture_exchange().request();
                 state.pending_capture = Some((
@@ -1911,12 +1906,10 @@ fn reduce_editor_message(state: &mut PumpEditorState, message: EditorMessage) {
                     state.params.active_sound(),
                     state.params.curve_revision(),
                 ));
-                state.capture_message = Some("Waiting for one complete cycle".to_owned());
+                state.capture_error = None;
             }
         }
-        EditorMessage::CancelCompressorCapture => {
-            state.cancel_compressor_capture("Capture cancelled")
-        }
+        EditorMessage::CancelCompressorCapture => state.cancel_compressor_capture(None),
         EditorMessage::ToggleHotkeyHelp => {
             state.hotkey_help_open = !state.hotkey_help_open;
             if state.hotkey_help_open {
