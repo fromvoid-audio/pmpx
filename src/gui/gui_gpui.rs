@@ -1676,9 +1676,23 @@ impl PumpEditor {
             EditorPanel::Compressor => {
                 self.compressor_panel_open = !self.compressor_panel_open;
                 self.compressor_overlay_only = false;
+                self.dispatch(
+                    EditorMessage::SetCompressor {
+                        index: 0,
+                        value: if self.compressor_panel_open { 1.0 } else { 0.0 },
+                    },
+                    cx,
+                );
             }
             EditorPanel::Filter => {
                 self.filter_panel_open = !self.filter_panel_open;
+                self.dispatch(
+                    EditorMessage::SetEffect {
+                        index: 0,
+                        value: if self.filter_panel_open { 1.0 } else { 0.0 },
+                    },
+                    cx,
+                );
                 self.clear_curve_hover(cx);
             }
         }
@@ -5606,20 +5620,20 @@ impl PumpEditor {
                 self.compressor_panel_open || self.state.borrow().params().compressor()[0] >= 0.5,
                 -1.0,
                 if self.compressor_panel_open {
-                    "Close compressor"
+                    "Close panel and disable compression"
                 } else {
-                    "Open compressor"
+                    "Open panel and enable compression"
                 },
             ),
             EditorPanel::Filter => (
                 "filter-panel",
                 self.filter_panel_open,
-                self.filter_panel_open,
+                self.filter_panel_open || self.state.borrow().params().effects()[0] >= 0.5,
                 1.0,
                 if self.filter_panel_open {
-                    "Close filter"
+                    "Close filter and disable crossover"
                 } else {
-                    "Open filter"
+                    "Open filter and enable crossover"
                 },
             ),
         };

@@ -815,8 +815,11 @@ mod macos {
         assert!(center("filter-panel").0 > center("bypass").0);
         assert!(pump::gui_gpui::screenshot_bounds_if_painted("compressor-capture").is_none());
         let base_plot = pump::gui_gpui::screenshot_bounds("curve-plot");
+        assert_eq!(params.effects()[0], 0.0);
         click_control(fixture, "filter-panel", 0);
         pump_appkit(app, &gui, 0.06);
+        assert_eq!(params.effects()[0], 1.0);
+        assert_eq!(params.compressor()[0], 0.0);
         fixture.sync_host_size(OUTPUT_WIDTH + PANEL_WIDTH);
         assert_eq!(pump::gui_gpui::screenshot_bounds("curve-plot"), base_plot);
         let [frequency_x, _, _, _] = pump::gui_gpui::screenshot_bounds("frequency-plot");
@@ -909,17 +912,23 @@ mod macos {
         assert_eq!(params.editable_curve_snapshot(), curve);
         send_key(app, fixture.window, &gui, "z", 6, COMMAND);
         assert_eq!(params.effects()[..2], [0.0, 200.0]);
+        send_key(app, fixture.window, &gui, "z", 6, COMMAND | SHIFT);
+        assert_eq!(params.effects()[0], 1.0);
 
         // Open COMP with FILTER still open. The editor keeps its width and
         // shifts to make room on the left.
         click_control(fixture, "compressor-panel", 0);
         pump_appkit(app, &gui, 0.06);
+        assert_eq!(params.compressor()[0], 1.0);
+        assert_eq!(params.effects()[0], 1.0);
         fixture.sync_host_size(OUTPUT_WIDTH + 2 * PANEL_WIDTH);
         let [x, y, w, h] = pump::gui_gpui::screenshot_bounds("curve-plot");
         assert!((x - (base_plot[0] + PANEL_WIDTH as f32)).abs() < 0.01);
         assert_eq!([y, w, h], base_plot[1..]);
         click_control(fixture, "filter-panel", 0);
         pump_appkit(app, &gui, 0.06);
+        assert_eq!(params.effects()[0], 0.0);
+        assert_eq!(params.compressor()[0], 1.0);
         fixture.sync_host_size(OUTPUT_WIDTH + PANEL_WIDTH);
         assert_eq!(
             pump::gui_gpui::screenshot_bounds("curve-plot"),
@@ -949,6 +958,8 @@ mod macos {
         assert_eq!(params.compressor()[17], 1.0);
         click_control(fixture, "compressor-17", 0);
         assert_eq!(params.compressor()[17], 0.0);
+        click_control(fixture, "compressor-0", 0);
+        assert_eq!(params.compressor()[0], 0.0);
         click_control(fixture, "compressor-0", 0);
         assert_eq!(params.compressor()[0], 1.0);
         let coral = |pixel: &[u8]| pixel[0] > 185 && pixel[1] < 145 && pixel[2] < 115;
@@ -1019,10 +1030,9 @@ mod macos {
             "capture must be undoable"
         );
         assert_eq!(params.compressor()[0], 1.0);
-        click_control(fixture, "compressor-0", 0);
-        assert_eq!(params.compressor()[0], 0.0);
         click_control(fixture, "compressor-panel", 0);
         pump_appkit(app, &gui, 0.04);
+        assert_eq!(params.compressor()[0], 0.0);
 
         fixture.sync_host_size(OUTPUT_WIDTH);
         assert_eq!(pump::gui_gpui::screenshot_bounds("curve-plot"), base_plot);

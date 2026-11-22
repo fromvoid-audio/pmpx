@@ -6,9 +6,9 @@ The header places “PORTALSURFER / PUMP” on the left and timing, history, A/B
 
 The parameter deck groups Smooth and Swing under Shape and the Mix and Output knobs under Level. Free timing also exposes the Rate knob under Level.
 
-The dynamics icon at the left edge opens the compressor panel with a vertical threshold fader, a live gain-reduction meter, rotary controls and a dedicated sidechain section. Capture sits at the bottom of the compressor panel with progress and error feedback beside it.
+The dynamics icon at the left edge opens the compressor panel and enables compression. Closing the panel disables compression. The panel has a vertical threshold fader, a live gain-reduction meter, rotary controls and a dedicated sidechain section. Capture sits at the bottom with progress and error feedback beside it.
 
-The filter icon at the right edge opens the filter panel. The plot compares the stereo input (PRE) and processed output (POST) behind the crossover curves, with slope, LP/HP mix bars and Solo controls below. Each panel opens independently and adds 240 logical pixels at the current window height. If the host keeps the current size, the panel opens over the editor above the footer. Click the same edge icon to close it.
+The filter icon at the right edge opens the filter panel and enables the dual-band crossover. Closing the panel disables the crossover. The plot compares the stereo input (PRE) and processed output (POST) behind the crossover curves, with slope, LP/HP mix bars and Solo controls below. Each panel opens independently and adds 240 logical pixels at the current window height. If the host keeps the current size, the panel opens over the editor above the footer. Click the same edge icon to close it.
 
 In a floating macOS VST3 window, COMP expands to the left and keeps the main editor anchored on screen. When the display edge leaves too little room, COMP opens as an overlay.
 

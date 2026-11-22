@@ -112,14 +112,15 @@ mapping and compatibility behavior.
 
 ## Sidechain compression and capture
 
-Open the left-hand `COMP` panel to enable live compression. It has a vertical
+The left-hand `COMP` icon enables live compression when opening the panel and
+disables it when closing the panel. The panel has a vertical
 threshold control, a gain-reduction meter and knobs for ratio, attack, release,
 range, makeup and dry/wet. The detector can use the main input, the host's
 external stereo sidechain, or a blend of the two, with dedicated gain and filter
 controls. Route the external signal to Pump's sidechain input in your DAW. The
 compressor also offers automatic release, soft clipping and a lightweight 2×
-oversampling option. This is Pump's
-own compressor, not a model of Ableton's Glue Compressor.
+oversampling option. This is Pump's own compressor, not a model of Ableton's
+Glue Compressor.
 
 The compressor’s Smooth knob adds up to 100 ms of smoothing to its gain
 envelope. You can hear the change and see it in the live curve before capture.

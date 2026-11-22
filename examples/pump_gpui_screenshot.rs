@@ -406,6 +406,7 @@ mod macos {
             let expanded_width = fixture.sync_host_size();
             assert_eq!(expanded_width, 880);
 
+            params.set_effect(0, 0.0);
             params.set_filter_enabled(1.0);
             params.set_filter_hp_freq_hz(320.0);
             params.set_filter_hp_q(1.25);
