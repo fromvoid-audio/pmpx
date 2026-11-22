@@ -290,6 +290,10 @@ mod macos {
     }
 
     unsafe fn pump_appkit(app: id, gui: &toybox::gpui_gui::GpuiHostedGui, seconds: f64) {
+        pump_appkit_events(app, seconds, || gui.pump());
+    }
+
+    unsafe fn pump_appkit_events(app: id, seconds: f64, mut after_events: impl FnMut()) {
         let deadline = Instant::now() + Duration::from_secs_f64(seconds);
         while Instant::now() < deadline {
             let date: id = msg_send![class!(NSDate), dateWithTimeIntervalSinceNow: 0.004_f64];
@@ -304,7 +308,7 @@ mod macos {
                 let _: () = msg_send![app, sendEvent: event];
             }
             let _: () = msg_send![app, updateWindows];
-            gui.pump();
+            after_events();
             thread::sleep(Duration::from_millis(1));
         }
     }
@@ -1060,6 +1064,122 @@ mod macos {
         gui.close();
     }
 
+    #[cfg(feature = "vst3")]
+    unsafe fn exercise_vst3_window_anchor() {
+        use cocoa::appkit::NSScreen;
+        use std::cell::Cell;
+        use std::rc::Rc;
+        use toybox::vst3::prelude::Steinberg::*;
+        use toybox::vst3::prelude::{Class, ComPtr, ComRef, ComWrapper};
+
+        struct HostResize {
+            window: id,
+            moves_left: Rc<Cell<bool>>,
+        }
+
+        impl Class for HostResize {
+            type Interfaces = (IPlugFrame,);
+        }
+
+        impl IPlugFrameTrait for HostResize {
+            unsafe fn resizeView(&self, view: *mut IPlugView, rect: *mut ViewRect) -> tresult {
+                let view = ComRef::from_raw(view).expect("VST3 view");
+                let requested = *rect;
+                let before = NSWindow::frame(self.window);
+                let width = f64::from(requested.right - requested.left);
+                self.window.setContentSize_(NSSize::new(
+                    width,
+                    f64::from(requested.bottom - requested.top),
+                ));
+                // Some hosts move the outer window themselves before calling onSize.
+                if self.moves_left.get() {
+                    let after = NSWindow::frame(self.window);
+                    self.window.setFrameOrigin_(NSPoint::new(
+                        before.origin.x + before.size.width - after.size.width,
+                        before.origin.y,
+                    ));
+                }
+                view.onSize(rect)
+            }
+        }
+
+        let app = NSApp();
+        let fixture = NativeFixture::new();
+        let screen = fixture.window.screen();
+        assert!(!screen.is_null(), "native host window has a screen");
+        let visible = screen.visibleFrame();
+        fixture.window.setLevel_(3);
+        fixture.window.setFrameOrigin_(NSPoint::new(
+            visible.origin.x + f64::from(PANEL_WIDTH) + 24.0,
+            visible.origin.y + 30.0,
+        ));
+        let moves_left = Rc::new(Cell::new(false));
+        let frame = ComWrapper::new(HostResize {
+            window: fixture.window,
+            moves_left: Rc::clone(&moves_left),
+        })
+        .to_com_ptr::<IPlugFrame>()
+        .expect("VST3 host frame");
+        let view = ComPtr::from_raw(pump::new_screenshot_vst3_editor()).expect("VST3 editor");
+        assert_eq!(view.setFrame(frame.as_ptr()), kResultOk);
+        assert_eq!(
+            view.attached(fixture.view.cast(), kPlatformTypeNSView),
+            kResultOk
+        );
+        pump_appkit_events(app, 0.08, || {});
+
+        let plot_on_screen = || {
+            let [x, y, w, h] = pump::gui_gpui::screenshot_bounds("curve-plot");
+            let window_point = NSRect::new(
+                NSPoint::new(f64::from(x), f64::from(OUTPUT_HEIGHT) - f64::from(y)),
+                NSSize::new(0.0, 0.0),
+            );
+            let point = fixture.window.convertRectToScreen_(window_point).origin;
+            [point.x, point.y, f64::from(w), f64::from(h)]
+        };
+        let assert_anchored = |base: [f64; 4], width: u32| {
+            let actual = plot_on_screen();
+            assert!(
+                actual.iter().zip(base).all(|(&a, b)| (a - b).abs() < 0.02),
+                "curve editor moved on screen from {base:?} to {actual:?}"
+            );
+            let dimensions = NSWindow::frame(fixture.window).size;
+            assert_eq!(
+                (dimensions.width, dimensions.height),
+                (f64::from(width), f64::from(OUTPUT_HEIGHT))
+            );
+        };
+
+        let original = plot_on_screen();
+        for host_moves_left in [false, true] {
+            moves_left.set(host_moves_left);
+            click_control(&fixture, "compressor-panel", 0);
+            pump_appkit_events(app, 0.08, || {});
+            assert_anchored(original, OUTPUT_WIDTH + PANEL_WIDTH);
+            click_control(&fixture, "compressor-panel", 0);
+            pump_appkit_events(app, 0.08, || {});
+            assert_anchored(original, OUTPUT_WIDTH);
+        }
+
+        // Where a left expansion will run off-screen, the compressor stays
+        // overlaid and the filter can still dock independently on the right.
+        moves_left.set(false);
+        fixture.window.setFrameOrigin_(NSPoint::new(
+            visible.origin.x + 24.0,
+            visible.origin.y + 30.0,
+        ));
+        let edge = plot_on_screen();
+        click_control(&fixture, "compressor-panel", 0);
+        pump_appkit_events(app, 0.08, || {});
+        assert_anchored(edge, OUTPUT_WIDTH);
+        click_control(&fixture, "filter-panel", 0);
+        pump_appkit_events(app, 0.08, || {});
+        assert_anchored(edge, OUTPUT_WIDTH + PANEL_WIDTH);
+        let [filter_x, _, _, _] = pump::gui_gpui::screenshot_bounds("frequency-plot");
+        assert!(filter_x >= OUTPUT_WIDTH as f32);
+        assert_eq!(view.removed(), kResultOk);
+    }
+
     pub fn run() {
         unsafe {
             let pool = NSAutoreleasePool::new(nil);
@@ -1067,6 +1187,8 @@ mod macos {
             let fixture = NativeFixture::new();
             exercise_native_input(&fixture);
             drop(fixture);
+            #[cfg(feature = "vst3")]
+            exercise_vst3_window_anchor();
             pool.drain();
         }
     }

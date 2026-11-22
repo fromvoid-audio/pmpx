@@ -62,6 +62,9 @@ mod transport;
 #[cfg(feature = "vst3")]
 mod vst3;
 
+#[cfg(all(target_os = "macos", feature = "vst3", feature = "screenshot-test"))]
+pub use vst3::new_screenshot_vst3_editor;
+
 #[cfg(test)]
 mod test_alloc {
     use std::alloc::{GlobalAlloc, Layout, System};

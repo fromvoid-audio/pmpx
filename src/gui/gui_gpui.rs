@@ -842,7 +842,7 @@ pub(crate) enum ResizeDisposition {
     Rejected,
 }
 
-pub(crate) type ResizeRequester = Rc<dyn Fn(u32, u32) -> ResizeDisposition>;
+pub(crate) type ResizeRequester = Rc<dyn Fn(u32, u32, i32) -> ResizeDisposition>;
 
 type AcceptedClapSize = Rc<Cell<Option<(u32, u32)>>>;
 
@@ -852,14 +852,14 @@ fn clap_resize_requester(
 ) -> ResizeRequester {
     use toybox::clack_extensions::gui::HostGui;
     let Some(gui) = host.get_extension::<HostGui>() else {
-        return Rc::new(|_, _| ResizeDisposition::Rejected);
+        return Rc::new(|_, _, _| ResizeDisposition::Rejected);
     };
     // SAFETY: The callback is held by the host-owned editor and runs on the
     // main thread. The host handle outlives its plugin and hosted editor.
     let host = unsafe {
         std::mem::transmute::<crate::HostSharedHandle<'_>, crate::HostSharedHandle<'static>>(host)
     };
-    Rc::new(move |width, height| {
+    Rc::new(move |width, height, _| {
         if gui.request_resize(&host, width, height).is_ok() {
             accepted_size.set(Some((width, height)));
             ResizeDisposition::ResizeLocally
@@ -1111,7 +1111,7 @@ pub fn new_screenshot_gui_with_params() -> (
         Arc::clone(&params),
         Arc::clone(&status),
         clap_edit_sink(Arc::new(PumpAutomationQueue::default()), None),
-        Rc::new(|_, _| ResizeDisposition::ResizeLocally),
+        Rc::new(|_, _, _| ResizeDisposition::ResizeLocally),
     );
     (gui, params, status)
 }
@@ -1220,6 +1220,7 @@ struct PumpEditor {
     active_mix_slider: Option<(usize, f32, f32)>,
     active_compressor_drag: Option<(usize, f32, f32)>,
     compressor_panel_open: bool,
+    compressor_overlay_only: bool,
     filter_panel_open: bool,
     visible: Rc<Cell<bool>>,
     spectrum: Option<SpectrumAnalyzer>,
@@ -1410,6 +1411,7 @@ impl PumpEditor {
             active_mix_slider: None,
             active_compressor_drag: None,
             compressor_panel_open: false,
+            compressor_overlay_only: false,
             filter_panel_open: false,
             visible,
             spectrum: None,
@@ -1629,7 +1631,7 @@ impl PumpEditor {
 
     fn panel_widths(&self) -> (u32, u32) {
         (
-            if self.compressor_panel_open {
+            if self.compressor_panel_open && !self.compressor_overlay_only {
                 SIDE_PANEL_WIDTH
             } else {
                 0
@@ -1659,8 +1661,16 @@ impl PumpEditor {
                 }
             })
             .clamp(MIN_WINDOW_WIDTH, MAX_WINDOW_WIDTH);
+        let docked_left = if width.saturating_sub(base) >= left {
+            left
+        } else {
+            0
+        };
         match panel {
-            EditorPanel::Compressor => self.compressor_panel_open = !self.compressor_panel_open,
+            EditorPanel::Compressor => {
+                self.compressor_panel_open = !self.compressor_panel_open;
+                self.compressor_overlay_only = false;
+            }
             EditorPanel::Filter => {
                 self.filter_panel_open = !self.filter_panel_open;
                 self.clear_curve_hover(cx);
@@ -1668,6 +1678,7 @@ impl PumpEditor {
         }
         let (left, right) = self.panel_widths();
         let target_width = base + left + right;
+        let left_delta = left as i32 - docked_left as i32;
         self.main_panel_width = (left + right > 0).then_some(base);
         self.resize_task = None;
         if target_width != width {
@@ -1682,11 +1693,21 @@ impl PumpEditor {
                 let disposition = resize(
                     (target_width as f32 * scale).round() as u32,
                     (height as f32 * scale).round() as u32,
+                    (left_delta as f32 * scale).round() as i32,
                 );
-                if matches!(disposition, ResizeDisposition::ResizeLocally) {
-                    let _ = view.update_in(cx, |_, window, _| {
-                        window.resize(size(px(target_width as f32), px(height as f32)));
-                    });
+                match disposition {
+                    ResizeDisposition::ResizeLocally => {
+                        let _ = view.update_in(cx, |_, window, _| {
+                            window.resize(size(px(target_width as f32), px(height as f32)));
+                        });
+                    }
+                    ResizeDisposition::Rejected if left_delta > 0 => {
+                        let _ = view.update_in(cx, |view, _, cx| {
+                            view.compressor_overlay_only = true;
+                            cx.notify();
+                        });
+                    }
+                    _ => {}
                 }
             }));
         }
@@ -6853,7 +6874,7 @@ impl Render for PumpEditor {
             .child(main)
             .children(filter)
             // Keep the controls reachable if the host holds the current size.
-            .when(left > 0 && !dock_left, |el| {
+            .when(self.compressor_panel_open && !dock_left, |el| {
                 el.child(
                     self.compressor_panel(cx)
                         .absolute()

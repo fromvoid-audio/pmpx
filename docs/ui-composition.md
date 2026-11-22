@@ -10,6 +10,8 @@ The COMP button opens a panel on the left with a vertical threshold fader, a liv
 
 The FILTER button opens a panel on the right. The plot shows the live stereo input spectrum behind the crossover curves, with slope, LP/HP mix bars and Solo controls below. Each panel opens independently and adds 240 logical pixels at the current window height. If the host keeps the current size, the panel opens over the editor and can be closed from its header.
 
+In a floating macOS VST3 window, COMP expands to the left and keeps the main editor anchored on screen. When the display edge leaves too little room, COMP opens as an overlay.
+
 The Frame composition is a visual reference; native control behavior belongs to Pump. Native macOS/Windows rendering requires validation on those platforms.
 
 ## Frame R7 style update

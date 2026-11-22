@@ -4,6 +4,11 @@ use std::rc::Rc;
 
 use crate::gui::gui_gpui::{ResizeDisposition, ResizeRequester};
 
+#[cfg(target_os = "macos")]
+mod window_anchor;
+#[cfg(target_os = "macos")]
+use window_anchor::WindowAnchor;
+
 pub(super) struct Vst3HostParamEditSink {
     pub(super) shared: Arc<PumpVst3Shared>,
 }
@@ -202,10 +207,18 @@ struct ResizeTarget {
     view: Cell<*mut IPlugView>,
     frame: RefCell<Option<ComPtr<IPlugFrame>>>,
     attached: Cell<bool>,
+    #[cfg(target_os = "macos")]
+    parent: Cell<*mut c_void>,
+    #[cfg(target_os = "macos")]
+    anchor: Cell<Option<WindowAnchor>>,
+    #[cfg(target_os = "macos")]
+    in_resize_request: Cell<bool>,
 }
 
 impl ResizeTarget {
-    fn request(&self, width: u32, height: u32) -> ResizeDisposition {
+    fn request(&self, width: u32, height: u32, _left_delta: i32) -> ResizeDisposition {
+        #[cfg(target_os = "macos")]
+        self.anchor.set(None);
         if !self.attached.get() {
             return ResizeDisposition::Rejected;
         }
@@ -218,12 +231,84 @@ impl ResizeTarget {
         let Some(frame) = self.frame.borrow().clone() else {
             return ResizeDisposition::Rejected;
         };
+        #[cfg(target_os = "macos")]
+        {
+            let anchor = if _left_delta == 0 {
+                None
+            } else {
+                let mut previous = view_rect(0, 0);
+                // The native view and its host parent remain valid while attached.
+                if unsafe { view.getSize(&mut previous) } != kResultOk {
+                    return ResizeDisposition::Rejected;
+                }
+                unsafe {
+                    WindowAnchor::capture(
+                        self.parent.get().cast(),
+                        (
+                            previous.right - previous.left,
+                            previous.bottom - previous.top,
+                        ),
+                        width,
+                        height,
+                        _left_delta,
+                    )
+                }
+            };
+            if _left_delta > 0 && anchor.is_none() {
+                return ResizeDisposition::Rejected;
+            }
+            self.anchor.set(anchor);
+            self.in_resize_request.set(true);
+        }
+
         let mut rect = view_rect(width as i32, height as i32);
         // No editor or frame borrow is held while the host calls onSize.
-        if unsafe { frame.resizeView(view.as_ptr(), &mut rect) } == kResultOk {
+        let result = unsafe { frame.resizeView(view.as_ptr(), &mut rect) };
+        #[cfg(target_os = "macos")]
+        {
+            self.in_resize_request.set(false);
+            if result == kResultOk && self.anchor.get().is_some() {
+                let mut accepted = view_rect(0, 0);
+                if unsafe { view.getSize(&mut accepted) } == kResultOk {
+                    self.finish_anchor(accepted);
+                }
+            } else {
+                self.anchor.set(None);
+            }
+        }
+        if result == kResultOk {
             ResizeDisposition::HostWillResize
         } else {
             ResizeDisposition::Rejected
+        }
+    }
+
+    #[cfg(target_os = "macos")]
+    fn finish_anchor(&self, accepted: ViewRect) {
+        if self.in_resize_request.get() {
+            return;
+        }
+        let Some(anchor) = self.anchor.get() else {
+            return;
+        };
+        if anchor.expired() {
+            self.anchor.set(None);
+        } else if anchor.matches(
+            accepted.right - accepted.left,
+            accepted.bottom - accepted.top,
+        ) {
+            self.anchor.set(None);
+            // A detachment clears the parent and pending anchor.
+            unsafe { anchor.restore(self.parent.get().cast()) };
+        }
+    }
+
+    fn detach(&self) {
+        self.attached.set(false);
+        #[cfg(target_os = "macos")]
+        {
+            self.parent.set(ptr::null_mut());
+            self.anchor.set(None);
         }
     }
 }
@@ -246,7 +331,7 @@ impl PumpVst3EditorView {
         let requester = Rc::clone(&resize);
         let adapter = PumpVst3GuiAdapter::with_resize(
             shared,
-            Rc::new(move |width, height| requester.request(width, height)),
+            Rc::new(move |width, height, left_delta| requester.request(width, height, left_delta)),
         );
         let (width, height) = preferred_window_size();
         let inner = HostedVst3View::new(adapter, width, height)
@@ -270,6 +355,7 @@ impl PumpVst3EditorView {
 
 impl Drop for PumpVst3EditorView {
     fn drop(&mut self) {
+        self.resize.detach();
         self.resize.view.set(ptr::null_mut());
         let frame = self.resize.frame.borrow_mut().take();
         drop(frame);
@@ -287,12 +373,16 @@ impl IPlugViewTrait for PumpVst3EditorView {
 
     unsafe fn attached(&self, parent: *mut c_void, platform: FIDString) -> tresult {
         let result = unsafe { self.inner.attached(parent, platform) };
-        self.resize.attached.set(result == kResultOk);
+        if result == kResultOk {
+            self.resize.attached.set(true);
+            #[cfg(target_os = "macos")]
+            self.resize.parent.set(parent);
+        }
         result
     }
 
     unsafe fn removed(&self) -> tresult {
-        self.resize.attached.set(false);
+        self.resize.detach();
         let frame = self.resize.frame.borrow_mut().take();
         drop(frame);
         unsafe { self.inner.removed() }
@@ -315,7 +405,13 @@ impl IPlugViewTrait for PumpVst3EditorView {
     }
 
     unsafe fn onSize(&self, rect: *mut ViewRect) -> tresult {
-        unsafe { self.inner.onSize(rect) }
+        let result = unsafe { self.inner.onSize(rect) };
+        #[cfg(target_os = "macos")]
+        if result == kResultOk {
+            // A successful inner callback validated and normalized the rect.
+            self.resize.finish_anchor(unsafe { *rect });
+        }
+        result
     }
 
     unsafe fn onFocus(&self, focused: TBool) -> tresult {
@@ -384,7 +480,7 @@ mod tests {
         target.attached.set(true);
         for width in [880, 1120, 880, 640] {
             assert!(matches!(
-                target.request(width, 400),
+                target.request(width, 400, 0),
                 ResizeDisposition::HostWillResize
             ));
             let mut rect = view_rect(0, 0);
@@ -393,7 +489,7 @@ mod tests {
         }
         accepts_resize.set(false);
         assert!(matches!(
-            target.request(880, 400),
+            target.request(880, 400, 0),
             ResizeDisposition::Rejected
         ));
         let mut rect = view_rect(0, 0);
@@ -401,7 +497,7 @@ mod tests {
         assert_eq!((rect.right, rect.bottom), (640, 400));
         assert_eq!(unsafe { view.setFrame(ptr::null_mut()) }, kResultOk);
         assert!(matches!(
-            target.request(880, 400),
+            target.request(880, 400, 0),
             ResizeDisposition::Rejected
         ));
     }

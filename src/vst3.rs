@@ -69,6 +69,13 @@ mod factory;
 #[cfg(any(target_os = "macos", target_os = "windows"))]
 mod gui_adapter;
 
+/// Create the production VST3 view for the native AppKit test host.
+#[cfg(all(target_os = "macos", feature = "screenshot-test"))]
+#[doc(hidden)]
+pub fn new_screenshot_vst3_editor() -> *mut IPlugView {
+    gui_adapter::PumpVst3EditorView::create(Arc::new(PumpVst3Shared::new()))
+}
+
 use controller::PumpVst3Controller;
 #[cfg(all(test, any(target_os = "macos", target_os = "windows")))]
 use gui_adapter::PumpVst3GuiAdapter;
