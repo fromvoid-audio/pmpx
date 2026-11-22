@@ -1,5 +1,7 @@
 # pmpx
 
+[![Support me on Ko-fi](https://img.shields.io/badge/Support%20me%20on%20Ko--fi-72a4f2?style=for-the-badge&logo=kofi&logoColor=white)](https://ko-fi.com/F7X2225YCF)
+
 pmpx is a node-based, beat-synced gain shaper with sidechain compression and editable envelope capture. It was previously called Pump. The CLAP ID, VST3 class IDs, and saved state and preset formats carry forward from Pump.
 
 ## Build
