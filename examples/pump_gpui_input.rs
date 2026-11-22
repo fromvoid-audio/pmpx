@@ -939,6 +939,15 @@ mod macos {
                 "{key} outside editor: {x},{y},{w},{h}"
             );
         }
+        let [release_x, release_y, release_w, release_h] =
+            pump::gui_gpui::screenshot_bounds("compressor-3");
+        let [auto_x, auto_y, auto_w, _] = pump::gui_gpui::screenshot_bounds("compressor-17");
+        assert!(((auto_x + auto_w * 0.5) - (release_x + release_w * 0.5)).abs() < 1.);
+        assert!((0.0..=4.0).contains(&(auto_y - (release_y + release_h))));
+        click_control(fixture, "compressor-17", 0);
+        assert_eq!(params.compressor()[17], 1.0);
+        click_control(fixture, "compressor-17", 0);
+        assert_eq!(params.compressor()[17], 0.0);
         click_control(fixture, "compressor-0", 0);
         assert_eq!(params.compressor()[0], 1.0);
         let coral = |pixel: &[u8]| pixel[0] > 185 && pixel[1] < 145 && pixel[2] < 115;

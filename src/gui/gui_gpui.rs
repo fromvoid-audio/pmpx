@@ -5840,7 +5840,7 @@ impl PumpEditor {
         .w(px(14.))
         .h(px(78.));
         self.panel_shell(EditorPanel::Compressor, cx)
-            .child(div().flex().gap(px(4.)).children(controls(&[0, 17, 8, 18])))
+            .child(div().flex().gap(px(4.)).children(controls(&[0, 8, 18])))
             .child(
                 div()
                     .flex()
@@ -5872,8 +5872,28 @@ impl PumpEditor {
                         div()
                             .flex()
                             .flex_1()
-                            .h(px(48.))
-                            .children(controls(&[4, 2, 3])),
+                            .h(px(68.))
+                            .children(controls(&[4, 2]).into_iter().map(|knob| knob.h(px(48.))))
+                            .child(
+                                div()
+                                    .flex_1()
+                                    .min_w(px(0.))
+                                    .flex()
+                                    .flex_col()
+                                    .items_center()
+                                    .gap(px(3.))
+                                    .child(
+                                        self.compressor_control(3, values[3], cx)
+                                            .flex_none()
+                                            .w_full()
+                                            .h(px(48.)),
+                                    )
+                                    .child(
+                                        self.compressor_control(17, values[17], cx)
+                                            .flex_none()
+                                            .w(px(38.)),
+                                    ),
+                            ),
                     ),
             )
             .child(div().h(px(46.)).flex_shrink_0().flex().children(controls(&[
