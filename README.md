@@ -131,9 +131,10 @@ While compression is active, the coral gain curve updates live in the plot.
 To freeze it, choose Sync with Delay at zero, turn detector listen and bypass off, start host
 playback, then press `CAPTURE`. Pump waits for the next cycle boundary and
 records one full cycle. It turns compression off and replaces the drawn curve
-with an editable Bézier envelope. Capture accounts for Pump's Mix and adjusts
-Depth, Floor, Smooth, Mix and, when needed for makeup gain, Output Gain; undo
-restores the previous settings and curve. Capture needs a host beat timeline.
+with a Bézier envelope of at most 12 editable points. Capture accounts for
+Pump's Mix and adjusts Depth, Floor, Smooth, Mix and, when needed for makeup
+gain, Output Gain. Undo restores the previous settings and curve. Capture
+needs a host beat timeline.
 If band processing is enabled, reduce makeup until the captured gain does not
 exceed unity. Soft clipping is nonlinear and cannot be frozen into a gain curve.
 Changing the curve, sound, timing or transport during a take cancels or restarts

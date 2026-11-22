@@ -3324,7 +3324,7 @@ fn draw_compressor_preview(
     samples: &crate::incoming_waveform::CompressorPreviewSnapshot,
     window: &mut Window,
 ) {
-    use crate::compressor_capture::fit_bezier_anchors;
+    use crate::compressor_capture::fit_compressor_bezier;
     use crate::curve::CubicBezier;
 
     let step = (width - 1.0).max(1.0) / (samples.len() - 1) as f32;
@@ -3353,12 +3353,20 @@ fn draw_compressor_preview(
                 point.y,
             ));
         } else if gains.len() >= 2 {
-            let anchors = fit_bezier_anchors(&gains, crate::curve::MAX_EDITABLE_NODES);
+            let anchors = fit_compressor_bezier(&gains);
             path.move_to(position(node(0)));
             for (segment, pair) in anchors.windows(2).enumerate() {
-                let previous = segment.checked_sub(1).map(|index| node(anchors[index]));
-                let next = anchors.get(segment + 2).copied().map(node);
-                let cubic = CubicBezier::between(previous, node(pair[0]), node(pair[1]), next, 0.0);
+                let previous = segment
+                    .checked_sub(1)
+                    .map(|index| node(anchors[index].sample));
+                let next = anchors.get(segment + 2).map(|anchor| node(anchor.sample));
+                let cubic = CubicBezier::between(
+                    previous,
+                    node(pair[0].sample),
+                    node(pair[1].sample),
+                    next,
+                    pair[0].tension,
+                );
                 path.cubic_bezier_to(
                     position(cubic.end),
                     position(cubic.control_a),
