@@ -4,7 +4,7 @@ use toybox::clack_plugin::utils::ClapId;
 use toybox::dsp::TransportState;
 
 use crate::dsp::{DspSettings, DspTelemetry, PumpEngine};
-use crate::incoming_waveform::IncomingWaveformCapture;
+use crate::incoming_waveform::WaveformBlock;
 use crate::params::{apply_param_event, PumpParams};
 
 #[derive(Clone, Copy, Debug)]
@@ -176,7 +176,7 @@ pub(crate) fn process_stereo_block(
     settings: &mut DspSettings,
     last_curve_revision: &mut u32,
     transport: TransportState,
-    mut waveform: Option<IncomingWaveformCapture<'_>>,
+    mut waveform: Option<WaveformBlock<'_>>,
 ) -> Option<DspTelemetry> {
     let StereoBlockSlices {
         left,
@@ -200,14 +200,15 @@ pub(crate) fn process_stereo_block(
         }
         let input_left = left[sample_offset];
         let input_right = right[sample_offset];
+        let sidechain_sample = sidechain.and_then(|(left, right)| {
+            Some([*left.get(sample_offset)?, *right.get(sample_offset)?])
+        });
         let (telemetry, raw_cycle_phase) = engine.process_sample_with_detector(
             &mut left[sample_offset],
             &mut right[sample_offset],
             *settings,
             transport_for_sample,
-            sidechain.and_then(|(left, right)| {
-                Some([*left.get(sample_offset)?, *right.get(sample_offset)?])
-            }),
+            sidechain_sample,
         );
         if !telemetry.bypassed && input_left.abs().max(input_right.abs()) > 1.0e-5 {
             input_active = true;
@@ -216,13 +217,10 @@ pub(crate) fn process_stereo_block(
         if let Some(capture) = waveform.as_mut() {
             capture.record(
                 raw_cycle_phase,
-                telemetry.phase,
-                settings.beats_per_cycle,
-                settings.delay_beats,
-                settings.swing,
-                settings.timing_mode,
-                input_left,
-                input_right,
+                telemetry,
+                settings,
+                [input_left, input_right],
+                sidechain_sample,
             );
         }
         last_telemetry = Some(telemetry);
@@ -230,17 +228,8 @@ pub(crate) fn process_stereo_block(
     }
 
     schedule.apply_remaining(params, settings);
-    if frame_count == 0 {
-        if let Some(capture) = waveform.as_mut() {
-            capture.reconcile_cycle_mapping(
-                settings.beats_per_cycle,
-                settings.delay_beats,
-                settings.swing,
-                settings.timing_mode,
-            );
-        }
-    } else if let Some(capture) = waveform {
-        capture.finish();
+    if let Some(capture) = waveform {
+        capture.finish(settings, frame_count);
     }
     last_telemetry.map(|mut telemetry| {
         if telemetry.bypassed {
@@ -294,7 +283,7 @@ pub(crate) unsafe fn process_stereo_block_raw(
     settings: &mut DspSettings,
     last_curve_revision: &mut u32,
     transport: TransportState,
-    mut waveform: Option<IncomingWaveformCapture<'_>>,
+    mut waveform: Option<WaveformBlock<'_>>,
 ) -> Option<DspTelemetry> {
     engine.begin_capture_block(*settings, transport, block.num_samples);
     let mut transport_for_sample = transport;
@@ -316,17 +305,18 @@ pub(crate) unsafe fn process_stereo_block_raw(
         let mut right = unsafe { block.input_right.add(sample_offset).read() };
         let input_left = left;
         let input_right = right;
+        let sidechain_sample = block.sidechain.map(|(side_left, side_right)| unsafe {
+            [
+                side_left.add(sample_offset).read(),
+                side_right.add(sample_offset).read(),
+            ]
+        });
         let (telemetry, raw_cycle_phase) = engine.process_sample_with_detector(
             &mut left,
             &mut right,
             *settings,
             transport_for_sample,
-            block.sidechain.map(|(side_left, side_right)| unsafe {
-                [
-                    side_left.add(sample_offset).read(),
-                    side_right.add(sample_offset).read(),
-                ]
-            }),
+            sidechain_sample,
         );
         if !telemetry.bypassed && input_left.abs().max(input_right.abs()) > 1.0e-5 {
             input_active = true;
@@ -335,13 +325,10 @@ pub(crate) unsafe fn process_stereo_block_raw(
         if let Some(capture) = waveform.as_mut() {
             capture.record(
                 raw_cycle_phase,
-                telemetry.phase,
-                settings.beats_per_cycle,
-                settings.delay_beats,
-                settings.swing,
-                settings.timing_mode,
-                input_left,
-                input_right,
+                telemetry,
+                settings,
+                [input_left, input_right],
+                sidechain_sample,
             );
         }
         last_telemetry = Some(telemetry);
@@ -353,17 +340,8 @@ pub(crate) unsafe fn process_stereo_block_raw(
     }
 
     schedule.apply_remaining(params, settings);
-    if block.num_samples == 0 {
-        if let Some(capture) = waveform.as_mut() {
-            capture.reconcile_cycle_mapping(
-                settings.beats_per_cycle,
-                settings.delay_beats,
-                settings.swing,
-                settings.timing_mode,
-            );
-        }
-    } else if let Some(capture) = waveform {
-        capture.finish();
+    if let Some(capture) = waveform {
+        capture.finish(settings, block.num_samples);
     }
     last_telemetry.map(|mut telemetry| {
         if telemetry.bypassed {
@@ -381,9 +359,7 @@ pub(crate) unsafe fn process_stereo_block_raw(
 mod tests {
     use super::*;
     use crate::curve::CURVE_TABLE_LEN;
-    #[cfg(feature = "vst3")]
-    use crate::incoming_waveform::IncomingWaveformBuffer;
-    use crate::incoming_waveform::IncomingWaveformWriter;
+    use crate::incoming_waveform::WaveformWriters;
     use crate::params::{
         PARAM_BYPASS_ID, PARAM_DELAY_ID, PARAM_DEPTH_ID, PARAM_FLOOR_ID, PARAM_FREE_RATE_ID,
         PARAM_MIX_ID, PARAM_OUTPUT_GAIN_ID, PARAM_PHASE_OFFSET_ID, PARAM_SMOOTH_ID, PARAM_SOUND_ID,
@@ -688,11 +664,13 @@ mod tests {
     fn zero_frame_offset_and_free_rate_automation_retain_waveform_generation() {
         let params = PumpParams::new();
         params.set_timing_mode(crate::params::TIMING_MODE_FREE as f32);
-        let buffer = IncomingWaveformBuffer::default();
-        let mut writer = IncomingWaveformWriter::default();
-        writer.begin_block(&buffer);
+        let status = crate::GuiStatus::default();
+        let buffer = status.incoming_waveform_buffer();
+        let mut writers = WaveformWriters::default();
+        let writer = &mut writers.input;
+        writer.begin_block(buffer);
         writer.record_with_cycle_mapping_and_timing_mode(
-            &buffer,
+            buffer,
             0.25,
             0.25,
             1.0,
@@ -702,7 +680,7 @@ mod tests {
             0.8,
             0.0,
         );
-        writer.finish_block(&buffer);
+        writer.finish_block(buffer);
 
         let generation_before = buffer.generation_for_test();
         buffer.set_last_update_micros_for_test(1234);
@@ -727,10 +705,7 @@ mod tests {
             &mut settings,
             &mut last_curve_revision,
             playing_transport(0.0),
-            Some(IncomingWaveformCapture::new_for_zero_frame(
-                &buffer,
-                &mut writer,
-            )),
+            Some(writers.begin_block(&status, false, 0)),
         );
 
         assert!((params.phase_offset() - 0.25).abs() < f32::EPSILON);
@@ -962,7 +937,7 @@ mod tests {
         let original = left;
         let mut right = left;
         let status = crate::GuiStatus::default();
-        let mut writer = IncomingWaveformWriter::default();
+        let mut writers = WaveformWriters::default();
 
         let telemetry = process_stereo_block(
             &mut engine,
@@ -976,10 +951,7 @@ mod tests {
             &mut settings,
             &mut last_curve_revision,
             playing_transport(0.0),
-            Some(IncomingWaveformCapture::new(
-                status.incoming_waveform_buffer(),
-                &mut writer,
-            )),
+            Some(writers.begin_block(&status, false, original.len())),
         )
         .expect("non-empty block should return telemetry");
 

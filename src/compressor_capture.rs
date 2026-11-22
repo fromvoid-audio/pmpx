@@ -2,6 +2,7 @@
 
 /// Endpoints included; the completed snapshot is suitable for curve fitting.
 pub(crate) const CAPTURE_POINTS: usize = 32769;
+pub(crate) const MAX_CAPTURE_GAIN: f32 = 16.0;
 const MAX_PHASE_STEP: f32 = 0.1;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -56,7 +57,7 @@ impl CompressorCapture {
             self.arm();
             return;
         }
-        let gain = gain.clamp(0.0, 16.0);
+        let gain = gain.clamp(0.0, MAX_CAPTURE_GAIN);
         let Some((previous_phase, previous_gain)) = self.previous.replace((phase, gain)) else {
             return;
         };

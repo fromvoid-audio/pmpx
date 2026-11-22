@@ -313,6 +313,27 @@ mod macos {
         capture
     }
 
+    fn count_plot_pixels(
+        gui: &toybox::gpui_gui::GpuiHostedGui,
+        color_matches: impl Fn(&[u8]) -> bool,
+    ) -> usize {
+        let (width, height, pixels) = capture_pixels(gui, "waveform and compressor previews");
+        let [left, top, plot_width, plot_height] = pump::gui_gpui::screenshot_bounds("curve-plot");
+        let scale_x = width as f32 / OUTPUT_WIDTH as f32;
+        let scale_y = height as f32 / OUTPUT_HEIGHT as f32;
+        let left_px = (left * scale_x).ceil() as usize;
+        let right_px = ((left + plot_width) * scale_x).floor() as usize;
+        let top_px = (top * scale_y).ceil() as usize;
+        let bottom_px = ((top + plot_height) * scale_y).floor() as usize;
+        pixels
+            .chunks_exact(width as usize * 4)
+            .take(bottom_px)
+            .skip(top_px)
+            .flat_map(|row| row[left_px * 4..right_px * 4].chunks_exact(4))
+            .filter(|pixel| color_matches(pixel))
+            .count()
+    }
+
     unsafe fn send_mouse_event(window: id, event_type: usize, x: f64, top_y: f64, modifiers: u64) {
         let window_number: isize = msg_send![window, windowNumber];
         let location = NSPoint::new(x, f64::from(OUTPUT_HEIGHT) - top_y);
@@ -780,6 +801,29 @@ mod macos {
         }
         click_control(fixture, "compressor-0", 0);
         assert_eq!(params.compressor()[0], 1.0);
+        let coral = |pixel: &[u8]| pixel[0] > 185 && pixel[1] < 145 && pixel[2] < 115;
+        let blue = |pixel: &[u8]| pixel[2] > 137 && pixel[2].saturating_sub(pixel[0]) > 45;
+        pump_appkit(app, &gui, 0.04);
+        let coral_before = count_plot_pixels(&gui, coral);
+        let blue_before = count_plot_pixels(&gui, blue);
+        pump::gui_gpui::seed_screenshot_waveform(&status, &params);
+        pump_appkit(app, &gui, 0.04);
+        assert!(
+            count_plot_pixels(&gui, coral) > coral_before + 40,
+            "the live compressor trace should render before capture"
+        );
+        click_control(fixture, "sidechain-waveform", 0);
+        pump_appkit(app, &gui, 0.04);
+        assert!(
+            count_plot_pixels(&gui, blue) > blue_before + 40,
+            "clicking SIDECHAIN should show the overlay in the plot"
+        );
+        send_key(app, fixture.window, &gui, "\r", 36, 0);
+        assert!(
+            count_plot_pixels(&gui, blue) <= blue_before + 10,
+            "Enter should hide the focused sidechain overlay"
+        );
+
         let before_threshold = params.compressor()[1];
         let (x, y) = center("compressor-1");
         send_mouse_down(fixture.window, x, y, 0);

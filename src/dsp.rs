@@ -107,6 +107,8 @@ pub struct DspTelemetry {
     pub gain: f32,
     /// Pump envelope gain before output trim, used only for gain-reduction metering.
     pub reduction_gain: f32,
+    /// Linear envelope gain sent to compressor capture, before output trim.
+    pub(crate) compressor_envelope_gain: Option<f32>,
     /// Whether this block contained at least one non-silent input sample.
     pub input_active: bool,
     /// Whether the click-safe bypass ramp has reached full dry unity.
@@ -731,6 +733,8 @@ impl PumpEngine {
                     blend_gain
                 }
                 .clamp(0.0, 1.0),
+                compressor_envelope_gain: (enabled && !settings.bypassed && controls[16] < 0.5)
+                    .then_some(blend_gain),
                 input_active: false,
                 bypassed: self.bypass.fully_bypassed(),
             },

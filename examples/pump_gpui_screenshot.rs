@@ -878,7 +878,7 @@ mod macos {
             params.set_swing(0.4);
             params.set_output_gain_db(-3.0);
             status.publish_gain_reduction(0.5, true);
-            pump::gui_gpui::seed_screenshot_waveform(&status);
+            pump::gui_gpui::seed_screenshot_waveform(&status, &params);
             capture(
                 app,
                 &fixture,

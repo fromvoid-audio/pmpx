@@ -1,5 +1,5 @@
 use super::*;
-use crate::incoming_waveform::{IncomingWaveformCapture, IncomingWaveformWriter};
+use crate::incoming_waveform::WaveformWriters;
 
 const CLAP_PARAM_EVENTS_PER_FRAME: usize = 4;
 const CLAP_BUFFER_ALLOCATION_ERROR: &str = "Unable to preallocate CLAP realtime processing buffers";
@@ -24,8 +24,8 @@ pub struct PumpAudioProcessor<'a> {
     automation_drain: Vec<AutomationEvent>,
     /// Reused sample-offset parameter schedule for the current block.
     param_schedule: ParamEventSchedule,
-    /// Bounded audio-owned peak aggregator for optional GUI visualization.
-    waveform_writer: IncomingWaveformWriter,
+    /// Bounded audio-owned collectors for the waveform and gain overlays.
+    waveform_writers: WaveformWriters,
     /// Activation sample rate used to convert CLAP input latency to beats.
     sample_rate: f64,
 }
@@ -49,11 +49,8 @@ impl<'a> PluginAudioProcessor<'a, PumpShared, PumpMainThread<'a>> for PumpAudioP
         let frame_count = audio.frames_count() as usize;
         if frame_count > self.scratch_left.len() {
             self.shared.status.mark_gain_reduction_inactive();
-            self.shared
-                .status
-                .incoming_waveform_buffer()
-                .mark_unavailable();
-            self.waveform_writer.reset();
+            self.shared.status.mark_waveforms_unavailable();
+            self.waveform_writers.reset();
             apply_param_events(events.input, |param_id, value| {
                 apply_clap_param_event(self.shared.params.as_ref(), param_id, value as f32)
             });
@@ -111,15 +108,16 @@ impl<'a> PluginAudioProcessor<'a, PumpShared, PumpMainThread<'a>> for PumpAudioP
             .unwrap_or((false, false));
         if should_mark_waveform_unavailable(frame_count, source_present, source_processed) {
             self.shared.status.mark_gain_reduction_inactive();
-            self.shared
-                .status
-                .incoming_waveform_buffer()
-                .mark_unavailable();
-            self.waveform_writer.reset();
+            self.shared.status.mark_waveforms_unavailable();
+            self.waveform_writers.reset();
         }
 
         self.param_schedule
             .apply_remaining(self.shared.params.as_ref(), &mut settings);
+        if frame_count == 0 && source_present {
+            self.waveform_writers
+                .reconcile_cycle_mapping(&self.shared.status, &settings);
+        }
 
         let _stats = self
             .shared
@@ -184,7 +182,7 @@ impl<'a> PumpAudioProcessor<'a> {
             sidechain_present: false,
             automation_drain,
             param_schedule,
-            waveform_writer: IncomingWaveformWriter::default(),
+            waveform_writers: WaveformWriters::default(),
             sample_rate: audio_config.sample_rate,
         })
     }
@@ -351,9 +349,10 @@ impl PumpAudioProcessor<'_> {
             settings,
             &mut self.last_curve_revision,
             transport,
-            Some(IncomingWaveformCapture::new(
-                self.shared.status.incoming_waveform_buffer(),
-                &mut self.waveform_writer,
+            Some(self.waveform_writers.begin_block(
+                &self.shared.status,
+                self.sidechain_present,
+                frames,
             )),
         );
         if let Some(telemetry) = telemetry {
@@ -480,7 +479,27 @@ mod tests {
                 TransportState::default()
             ));
         });
-        assert!((left[FRAMES - 1] - 10.0_f32.powf(-15.0 / 20.0)).abs() < 0.001);
+        let gain = 10.0_f32.powf(-15.0 / 20.0);
+        assert!((left[FRAMES - 1] - gain).abs() < 0.001);
+        let sidechain = shared
+            .status
+            .sidechain_waveform_buffer()
+            .snapshot()
+            .unwrap();
+        assert!(sidechain.contains(&1.0));
+        let preview = shared.status.compressor_preview_snapshot().unwrap();
+        assert!(preview
+            .iter()
+            .flatten()
+            .any(|sample| (sample - gain).abs() < 0.001));
+        assert_eq!(
+            shared
+                .status
+                .compressor_capture_exchange()
+                .current_request(),
+            0
+        );
+
         let mut empty_outputs = [];
         // SAFETY: the empty input and output lists contain no audio pointers.
         let missing = unsafe { Audio::from_raw_buffers(&[], &mut empty_outputs, FRAMES as u32) };
@@ -496,6 +515,26 @@ mod tests {
             TransportState::default()
         ));
         assert!((left[FRAMES - 1] - 1.0).abs() < 0.001);
+        assert!(shared
+            .status
+            .sidechain_waveform_buffer()
+            .snapshot()
+            .is_none());
+        let preview = shared.status.compressor_preview_snapshot().unwrap();
+        assert!(preview
+            .iter()
+            .flatten()
+            .any(|sample| (sample - 1.0).abs() < 0.001));
+
+        settings.compressor[0] = 0.0;
+        processor.param_schedule.begin_block(FRAMES);
+        assert!(processor.process_stereo_pair(
+            ChannelPair::InPlace(&mut left),
+            ChannelPair::InPlace(&mut right),
+            &mut settings,
+            TransportState::default()
+        ));
+        assert!(shared.status.compressor_preview_snapshot().is_none());
     }
 
     #[test]

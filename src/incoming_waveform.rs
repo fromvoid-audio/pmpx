@@ -15,6 +15,25 @@ const FORWARD_PHASE_DISCONTINUITY: f32 = 0.05;
 
 /// A bounded GUI snapshot of peak input amplitude over one normalized cycle.
 pub(crate) type IncomingWaveformSnapshot = [f32; INCOMING_WAVEFORM_BIN_COUNT];
+pub(crate) type CompressorPreviewSnapshot = [Option<f32>; INCOMING_WAVEFORM_BIN_COUNT];
+
+const COMPRESSOR_GAIN_ENCODING_SCALE: f32 = 1.0 + crate::compressor_capture::MAX_CAPTURE_GAIN;
+
+fn encode_compressor_gain(gain: f32) -> f32 {
+    (1.0 + gain.clamp(0.0, crate::compressor_capture::MAX_CAPTURE_GAIN))
+        / COMPRESSOR_GAIN_ENCODING_SCALE
+}
+
+pub(crate) fn compressor_preview_snapshot(
+    buffer: &IncomingWaveformBuffer,
+) -> Option<CompressorPreviewSnapshot> {
+    let gains = buffer.snapshot()?.map(|encoded| {
+        (encoded > 0.0).then_some((encoded * COMPRESSOR_GAIN_ENCODING_SCALE - 1.0).max(0.0))
+    });
+    // Match Capture's peak normalization when makeup raises gain above unity.
+    let scale = gains.iter().flatten().copied().fold(1.0_f32, f32::max);
+    Some(gains.map(|gain| gain.map(|gain| gain / scale)))
+}
 
 fn pack_slot(generation: u32, value_bits: u32) -> u64 {
     (u64::from(generation) << 32) | u64::from(value_bits)
@@ -55,6 +74,8 @@ impl Default for IncomingWaveformPage {
 
 /// Shared atomics written by the audio thread and sampled by the GUI thread.
 pub(crate) struct IncomingWaveformBuffer {
+    /// Use the latest value per bin and publish immediately after a remap.
+    live_trace: bool,
     generation: AtomicU32,
     /// Zero means no display is currently valid; otherwise this names a page and generation.
     display_token: AtomicU64,
@@ -71,6 +92,7 @@ impl Default for IncomingWaveformBuffer {
             // writes use the other page so no displayed page is mutated in place.
             display_token: AtomicU64::new(0),
             live_mode: AtomicBool::new(false),
+            live_trace: false,
             pages: array::from_fn(|_| IncomingWaveformPage::default()),
             last_update_micros: AtomicU64::new(0),
         }
@@ -78,6 +100,15 @@ impl Default for IncomingWaveformBuffer {
 }
 
 impl IncomingWaveformBuffer {
+    pub(crate) fn new_live_trace() -> Self {
+        let buffer = Self {
+            live_trace: true,
+            ..Self::default()
+        };
+        buffer.set_live_mode(true);
+        buffer
+    }
+
     fn generation(&self) -> u32 {
         self.generation.load(Ordering::Acquire)
     }
@@ -285,7 +316,7 @@ pub(crate) struct IncomingWaveformWriter {
     remap_state: RemapCaptureState,
     live_publication_suppressed: bool,
     current_bin: Option<usize>,
-    current_peak: f32,
+    current_value: f32,
     cycle_has_signal: bool,
     block_has_signal: bool,
     live_mode: bool,
@@ -361,7 +392,7 @@ impl IncomingWaveformWriter {
 
     fn clear_partial_capture(&mut self) {
         self.current_bin = None;
-        self.current_peak = 0.0;
+        self.current_value = 0.0;
         self.cycle_has_signal = false;
         self.block_has_signal = false;
     }
@@ -374,7 +405,7 @@ impl IncomingWaveformWriter {
         let live_mode = self.live_mode;
         let generation = buffer.invalidate();
         self.initial_snapshot_done = true;
-        self.live_publication_suppressed = true;
+        self.live_publication_suppressed = !buffer.live_trace;
         self.clear_partial_capture();
         self.last_raw_cycle_phase = None;
         self.last_phase = None;
@@ -484,14 +515,19 @@ impl IncomingWaveformWriter {
         if self.current_bin != Some(bin) {
             self.flush_current(buffer);
             self.current_bin = Some(bin);
-            self.current_peak = 0.0;
+            self.current_value = 0.0;
         }
         let peak = left.abs().max(right.abs());
         if peak.is_finite() {
             let peak = peak.clamp(0.0, 1.0);
             self.block_has_signal |= peak > SILENCE_FLOOR;
             self.cycle_has_signal |= peak > SILENCE_FLOOR;
-            self.current_peak = self.current_peak.max(peak);
+            self.current_value = if buffer.live_trace {
+                // Keep the latest gain, including releases while phase is held.
+                peak
+            } else {
+                self.current_value.max(peak)
+            };
         }
     }
 
@@ -549,7 +585,7 @@ impl IncomingWaveformWriter {
         self.last_cycle_mapping = None;
         self.remap_state = RemapCaptureState::Normal;
         self.current_bin = None;
-        self.current_peak = 0.0;
+        self.current_value = 0.0;
         self.cycle_has_signal = false;
         self.block_has_signal = false;
         self.live_mode = false;
@@ -557,79 +593,155 @@ impl IncomingWaveformWriter {
 
     fn flush_current(&self, buffer: &IncomingWaveformBuffer) {
         if let Some(bin) = self.current_bin {
-            buffer.publish_slot(self.write_page, self.generation, bin, self.current_peak);
+            buffer.publish_slot(self.write_page, self.generation, bin, self.current_value);
         }
     }
 }
 
-/// One enabled processing-block capture target.
-pub(crate) struct IncomingWaveformCapture<'a> {
-    buffer: &'a IncomingWaveformBuffer,
-    writer: &'a mut IncomingWaveformWriter,
+/// Audio-owned collectors sharing the same per-sample DSP timing.
+#[derive(Default)]
+pub(crate) struct WaveformWriters {
+    pub(crate) input: IncomingWaveformWriter,
+    sidechain: IncomingWaveformWriter,
+    compressor: IncomingWaveformWriter,
+    sidechain_active: bool,
+    compressor_active: bool,
 }
 
-impl<'a> IncomingWaveformCapture<'a> {
-    pub(crate) fn new(
-        buffer: &'a IncomingWaveformBuffer,
-        writer: &'a mut IncomingWaveformWriter,
-    ) -> Self {
-        writer.begin_block(buffer);
-        Self { buffer, writer }
+impl WaveformWriters {
+    pub(crate) fn begin_block<'a>(
+        &'a mut self,
+        status: &'a crate::GuiStatus,
+        sidechain_present: bool,
+        frame_count: usize,
+    ) -> WaveformBlock<'a> {
+        if frame_count != 0 {
+            self.input.begin_block(status.incoming_waveform_buffer());
+            if sidechain_present {
+                self.sidechain
+                    .begin_block(status.sidechain_waveform_buffer());
+            } else if self.sidechain_active {
+                status.sidechain_waveform_buffer().mark_unavailable();
+                self.sidechain.reset();
+            }
+            self.sidechain_active = sidechain_present;
+        }
+        WaveformBlock {
+            writers: self,
+            status,
+            compressor_started: false,
+        }
     }
 
-    /// Create a capture target for a zero-sample block without rotating the
-    /// writer. The final mapping is reconciled after parameter application.
-    #[cfg(feature = "vst3")]
-    pub(crate) fn new_for_zero_frame(
-        buffer: &'a IncomingWaveformBuffer,
-        writer: &'a mut IncomingWaveformWriter,
-    ) -> Self {
-        Self { buffer, writer }
-    }
-
-    #[allow(clippy::too_many_arguments)]
-    pub(crate) fn record(
-        &mut self,
-        raw_cycle_phase: f32,
-        phase: f32,
-        beats_per_cycle: f32,
-        delay_beats: usize,
-        swing: f32,
-        timing_mode: usize,
-        left: f32,
-        right: f32,
-    ) {
-        self.writer.record_with_cycle_mapping_and_timing_mode(
-            self.buffer,
-            raw_cycle_phase,
-            phase,
-            beats_per_cycle,
-            delay_beats,
-            swing,
-            timing_mode,
-            left,
-            right,
-        );
+    pub(crate) fn reset(&mut self) {
+        *self = Self::default();
     }
 
     pub(crate) fn reconcile_cycle_mapping(
         &mut self,
-        beats_per_cycle: f32,
-        delay_beats: usize,
-        swing: f32,
-        timing_mode: usize,
+        status: &crate::GuiStatus,
+        settings: &crate::dsp::DspSettings,
     ) {
-        self.writer.reconcile_cycle_mapping(
-            self.buffer,
-            beats_per_cycle,
-            delay_beats,
-            swing,
-            timing_mode,
+        for (writer, buffer) in [
+            (&mut self.input, status.incoming_waveform_buffer()),
+            (&mut self.sidechain, status.sidechain_waveform_buffer()),
+            (&mut self.compressor, status.compressor_preview_buffer()),
+        ] {
+            writer.reconcile_cycle_mapping(
+                buffer,
+                settings.beats_per_cycle,
+                settings.delay_beats,
+                settings.swing,
+                settings.timing_mode,
+            );
+        }
+        if self.compressor_active
+            && (settings.compressor[0] < 0.5 || settings.bypassed || settings.compressor[16] >= 0.5)
+        {
+            status.compressor_preview_buffer().mark_unavailable();
+            self.compressor.reset();
+            self.compressor_active = false;
+        }
+    }
+}
+
+pub(crate) struct WaveformBlock<'a> {
+    writers: &'a mut WaveformWriters,
+    status: &'a crate::GuiStatus,
+    compressor_started: bool,
+}
+
+impl WaveformBlock<'_> {
+    pub(crate) fn record(
+        &mut self,
+        raw_cycle_phase: f32,
+        telemetry: crate::dsp::DspTelemetry,
+        settings: &crate::dsp::DspSettings,
+        input: [f32; 2],
+        sidechain: Option<[f32; 2]>,
+    ) {
+        let record = |writer: &mut IncomingWaveformWriter, buffer, [left, right]: [f32; 2]| {
+            writer.record_with_cycle_mapping_and_timing_mode(
+                buffer,
+                raw_cycle_phase,
+                telemetry.phase,
+                settings.beats_per_cycle,
+                settings.delay_beats,
+                settings.swing,
+                settings.timing_mode,
+                left,
+                right,
+            );
+        };
+        record(
+            &mut self.writers.input,
+            self.status.incoming_waveform_buffer(),
+            input,
         );
+        if let Some(samples) = sidechain {
+            record(
+                &mut self.writers.sidechain,
+                self.status.sidechain_waveform_buffer(),
+                samples,
+            );
+        }
+        let preview = self.status.compressor_preview_buffer();
+        if let Some(gain) = telemetry.compressor_envelope_gain {
+            if !self.compressor_started {
+                self.writers.compressor.begin_block(preview);
+                self.compressor_started = true;
+                self.writers.compressor_active = true;
+            }
+            // Keep the capture's supported gain range, with zero reserved
+            // for bins the audio thread hasn't visited yet.
+            let encoded_gain = encode_compressor_gain(gain);
+            record(&mut self.writers.compressor, preview, [encoded_gain; 2]);
+        } else if self.writers.compressor_active {
+            preview.mark_unavailable();
+            self.writers.compressor.reset();
+            self.writers.compressor_active = false;
+            self.compressor_started = false;
+        }
     }
 
-    pub(crate) fn finish(self) {
-        self.writer.finish_block(self.buffer);
+    pub(crate) fn finish(self, settings: &crate::dsp::DspSettings, frame_count: usize) {
+        if frame_count == 0 {
+            self.writers.reconcile_cycle_mapping(self.status, settings);
+            return;
+        }
+        self.writers
+            .input
+            .finish_block(self.status.incoming_waveform_buffer());
+        if self.writers.sidechain_active {
+            self.writers
+                .sidechain
+                .finish_block(self.status.sidechain_waveform_buffer());
+        }
+        if self.compressor_started {
+            self.writers
+                .compressor
+                .finish_block(self.status.compressor_preview_buffer());
+        }
     }
 }
 
@@ -638,6 +750,33 @@ mod tests {
     use super::*;
     use crate::dsp::swing_warp_phase;
     use crate::test_alloc::assert_no_alloc;
+
+    #[test]
+    fn compressor_preview_updates_during_held_phase_and_restarts_after_seek() {
+        let buffer = IncomingWaveformBuffer::new_live_trace();
+        let mut writer = IncomingWaveformWriter::default();
+
+        let first = 0.125;
+        let after_seek = 0.75;
+        let publish = |writer: &mut IncomingWaveformWriter, phase, gain| {
+            writer.begin_block(&buffer);
+            writer.record(&buffer, phase, encode_compressor_gain(gain), 0.0);
+            writer.finish_block(&buffer);
+        };
+        let phase_bin = |phase| (phase * INCOMING_WAVEFORM_BIN_COUNT as f32) as usize;
+
+        publish(&mut writer, first, 0.25);
+        let snapshot = compressor_preview_snapshot(&buffer).unwrap();
+        assert!((snapshot[phase_bin(first)].unwrap() - 0.25).abs() < 1e-6);
+        publish(&mut writer, first, 1.0);
+        let snapshot = compressor_preview_snapshot(&buffer).unwrap();
+        assert!((snapshot[phase_bin(first)].unwrap() - 1.0).abs() < 1e-6);
+
+        publish(&mut writer, after_seek, 0.5);
+        let snapshot = compressor_preview_snapshot(&buffer).unwrap();
+        assert!(snapshot[phase_bin(first)].is_none());
+        assert!((snapshot[phase_bin(after_seek)].unwrap() - 0.5).abs() < 1e-6);
+    }
 
     #[test]
     fn fresh_buffer_has_a_stable_empty_snapshot() {

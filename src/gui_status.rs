@@ -69,6 +69,9 @@ pub struct GuiStatus {
     phase_extrapolation_enabled: AtomicBool,
     last_update_micros: AtomicU64,
     incoming_waveform: crate::incoming_waveform::IncomingWaveformBuffer,
+    sidechain_waveform: crate::incoming_waveform::IncomingWaveformBuffer,
+    show_sidechain_waveform: AtomicBool,
+    compressor_preview: crate::incoming_waveform::IncomingWaveformBuffer,
     compressor_capture: Arc<crate::compressor_capture::CaptureExchange>,
 }
 
@@ -99,6 +102,9 @@ impl Default for GuiStatus {
             phase_extrapolation_enabled: AtomicBool::new(true),
             last_update_micros: AtomicU64::new(0),
             incoming_waveform: crate::incoming_waveform::IncomingWaveformBuffer::default(),
+            sidechain_waveform: Default::default(),
+            show_sidechain_waveform: AtomicBool::new(false),
+            compressor_preview: crate::incoming_waveform::IncomingWaveformBuffer::new_live_trace(),
             compressor_capture: Arc::new(crate::compressor_capture::CaptureExchange::default()),
         }
     }
@@ -130,12 +136,46 @@ impl GuiStatus {
         self.incoming_waveform.snapshot()
     }
 
+    pub(crate) fn sidechain_waveform_buffer(
+        &self,
+    ) -> &crate::incoming_waveform::IncomingWaveformBuffer {
+        &self.sidechain_waveform
+    }
+
+    pub(crate) fn sidechain_waveform_visible(&self) -> bool {
+        self.show_sidechain_waveform.load(Ordering::Relaxed)
+    }
+
+    pub(crate) fn toggle_sidechain_waveform(&self) {
+        self.show_sidechain_waveform
+            .fetch_xor(true, Ordering::Relaxed);
+    }
+
+    pub(crate) fn compressor_preview_buffer(
+        &self,
+    ) -> &crate::incoming_waveform::IncomingWaveformBuffer {
+        &self.compressor_preview
+    }
+
+    pub(crate) fn compressor_preview_snapshot(
+        &self,
+    ) -> Option<crate::incoming_waveform::CompressorPreviewSnapshot> {
+        crate::incoming_waveform::compressor_preview_snapshot(&self.compressor_preview)
+    }
+
+    pub(crate) fn mark_waveforms_unavailable(&self) {
+        self.incoming_waveform.mark_unavailable();
+        self.sidechain_waveform.mark_unavailable();
+        self.compressor_preview.mark_unavailable();
+    }
+
     pub(crate) fn waveform_live_mode(&self) -> bool {
         self.incoming_waveform.live_mode()
     }
 
     pub(crate) fn set_waveform_live_mode(&self, enabled: bool) {
         self.incoming_waveform.set_live_mode(enabled);
+        self.sidechain_waveform.set_live_mode(enabled);
     }
     /// Update telemetry from the latest processed frame.
     pub fn update_transport(&self, phase: f32, transport: GuiTransportTelemetry) {
@@ -755,6 +795,7 @@ mod tests {
             applied_phase_offset: captured_snapshot.applied_phase_offset,
             gain: 1.0,
             reduction_gain: 1.0,
+            compressor_envelope_gain: None,
             input_active: false,
             bypassed: false,
         });
@@ -767,6 +808,7 @@ mod tests {
             applied_phase_offset: replacement_snapshot.applied_phase_offset,
             gain: 1.0,
             reduction_gain: 1.0,
+            compressor_envelope_gain: None,
             input_active: false,
             bypassed: false,
         });

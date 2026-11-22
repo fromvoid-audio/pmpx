@@ -5,7 +5,6 @@
 //! isolated so host-facing changes and DSP changes are easier to review.
 
 use super::*;
-use crate::incoming_waveform::IncomingWaveformCapture;
 use std::cell::UnsafeCell;
 use std::ops::{Deref, DerefMut};
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -91,11 +90,8 @@ impl PumpVst3Processor {
             );
         }
         if pending.processing_reset {
-            self.shared
-                .status
-                .incoming_waveform_buffer()
-                .mark_unavailable();
-            runtime.waveform_writer.reset();
+            self.shared.status.mark_waveforms_unavailable();
+            runtime.waveform_writers.reset();
             runtime
                 .engine
                 .reset_with_bypass(self.shared.params.bypassed());
@@ -156,16 +152,9 @@ impl PumpVst3Processor {
             gui_transport_telemetry(transport, settings, self.shared.status.beat_phase()),
         );
 
-        let mut waveform_capture = IncomingWaveformCapture::new_for_zero_frame(
-            self.shared.status.incoming_waveform_buffer(),
-            &mut runtime.waveform_writer,
-        );
-        waveform_capture.reconcile_cycle_mapping(
-            settings.beats_per_cycle,
-            settings.delay_beats,
-            settings.swing,
-            settings.timing_mode,
-        );
+        runtime
+            .waveform_writers
+            .reconcile_cycle_mapping(&self.shared.status, &settings);
         self.shared.status.mark_gain_reduction_inactive();
         process_ok()
     }
@@ -294,10 +283,7 @@ impl IComponentTrait for PumpVst3Processor {
         // Supported VST3 hosts serialize process with this lifecycle callback, so the
         // immediate mark is safe; the audio-owned reset remains deferred via RuntimeHandoff.
         // No extra RT lock or epoch machinery is intended here.
-        self.shared
-            .status
-            .incoming_waveform_buffer()
-            .mark_unavailable();
+        self.shared.status.mark_waveforms_unavailable();
         self.runtime_handoff.publish_processing_reset();
         kResultOk
     }
@@ -401,10 +387,7 @@ impl IAudioProcessorTrait for PumpVst3Processor {
         // Supported VST3 hosts serialize process with this lifecycle callback, so the
         // immediate mark is safe; the audio-owned reset remains deferred via RuntimeHandoff.
         // No extra RT lock or epoch machinery is intended here.
-        self.shared
-            .status
-            .incoming_waveform_buffer()
-            .mark_unavailable();
+        self.shared.status.mark_waveforms_unavailable();
         self.runtime_handoff.publish_processing_reset();
         kResultOk
     }
@@ -422,10 +405,7 @@ impl IAudioProcessorTrait for PumpVst3Processor {
         let Some(mut runtime) = self.runtime.try_acquire() else {
             self.shared.status.mark_gain_reduction_inactive();
             apply_vst3_param_points_immediately(process_data, self.shared.params.as_ref());
-            self.shared
-                .status
-                .incoming_waveform_buffer()
-                .mark_unavailable();
+            self.shared.status.mark_waveforms_unavailable();
             if process_data.numOutputs == 0 {
                 return process_ok();
             }
@@ -452,11 +432,8 @@ impl IAudioProcessorTrait for PumpVst3Processor {
         // range or sample format to validate after consuming parameter changes.
         if process_data.numOutputs == 0 {
             self.shared.status.mark_gain_reduction_inactive();
-            self.shared
-                .status
-                .incoming_waveform_buffer()
-                .mark_unavailable();
-            runtime.waveform_writer.reset();
+            self.shared.status.mark_waveforms_unavailable();
+            runtime.waveform_writers.reset();
             apply_scheduled_vst3_points_remaining(
                 &mut runtime.param_schedule,
                 self.shared.params.as_ref(),
@@ -466,11 +443,8 @@ impl IAudioProcessorTrait for PumpVst3Processor {
 
         if process_data.numSamples > 0 && process_data.symbolicSampleSize != VST3_SAMPLE_32 {
             self.shared.status.mark_gain_reduction_inactive();
-            self.shared
-                .status
-                .incoming_waveform_buffer()
-                .mark_unavailable();
-            runtime.waveform_writer.reset();
+            self.shared.status.mark_waveforms_unavailable();
+            runtime.waveform_writers.reset();
             apply_scheduled_vst3_points_remaining(
                 &mut runtime.param_schedule,
                 self.shared.params.as_ref(),
@@ -480,11 +454,8 @@ impl IAudioProcessorTrait for PumpVst3Processor {
 
         let Some(buffers) = (unsafe { raw_stereo_f32_buffers(process_data) }) else {
             self.shared.status.mark_gain_reduction_inactive();
-            self.shared
-                .status
-                .incoming_waveform_buffer()
-                .mark_unavailable();
-            runtime.waveform_writer.reset();
+            self.shared.status.mark_waveforms_unavailable();
+            runtime.waveform_writers.reset();
             apply_scheduled_vst3_points_remaining(
                 &mut runtime.param_schedule,
                 self.shared.params.as_ref(),
@@ -524,17 +495,11 @@ impl IAudioProcessorTrait for PumpVst3Processor {
         );
 
         let runtime = &mut *runtime;
-        let waveform_capture = if frame_count == 0 {
-            IncomingWaveformCapture::new_for_zero_frame(
-                self.shared.status.incoming_waveform_buffer(),
-                &mut runtime.waveform_writer,
-            )
-        } else {
-            IncomingWaveformCapture::new(
-                self.shared.status.incoming_waveform_buffer(),
-                &mut runtime.waveform_writer,
-            )
-        };
+        let waveform_capture = runtime.waveform_writers.begin_block(
+            &self.shared.status,
+            buffers.sidechain.is_some(),
+            frame_count,
+        );
         let telemetry = unsafe {
             process_stereo_block_raw(
                 &mut runtime.engine,

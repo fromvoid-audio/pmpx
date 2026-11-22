@@ -776,7 +776,8 @@ fn processor_declares_optional_stereo_sidechain_bus() {
 
 #[test]
 fn processor_keeps_main_audio_working_with_sidechain_bus_present() {
-    let processor = PumpVst3Processor::new(Arc::new(PumpVst3Shared::new()));
+    let shared = Arc::new(PumpVst3Shared::new());
+    let processor = PumpVst3Processor::new(Arc::clone(&shared));
     let mut fixture = stereo_process_fixture(32, -10.0);
     let mut side_left = [0.75_f32; 32];
     let mut side_right = [0.25_f32; 32];
@@ -798,6 +799,29 @@ fn processor_keeps_main_audio_working_with_sidechain_bus_present() {
         .output_left
         .iter()
         .all(|sample| *sample != -10.0 && sample.is_finite()));
+    let input = shared.status.incoming_waveform_snapshot().unwrap();
+    let sidechain = shared
+        .status
+        .sidechain_waveform_buffer()
+        .snapshot()
+        .unwrap();
+    assert!(input
+        .iter()
+        .zip(sidechain)
+        .any(|(&input, sidechain)| { input == 1.0 && sidechain == 0.75 }));
+    assert!(shared.status.compressor_preview_snapshot().is_none());
+
+    fixture.process_data.numInputs = 1;
+    assert_eq!(
+        unsafe { processor.process(&mut fixture.process_data) },
+        process_ok()
+    );
+    assert!(shared
+        .status
+        .sidechain_waveform_buffer()
+        .snapshot()
+        .is_none());
+    assert!(shared.status.incoming_waveform_snapshot().is_some());
 }
 
 #[test]
@@ -809,7 +833,7 @@ fn processor_uses_external_sidechain_for_live_compression() {
     shared.params.set_compressor_control(2, 0.01);
     shared.params.set_compressor_control(4, 4.0);
     shared.params.set_compressor_control(9, 1.0);
-    let processor = PumpVst3Processor::new(shared);
+    let processor = PumpVst3Processor::new(Arc::clone(&shared));
     let mut fixture = stereo_process_fixture(FRAMES, -10.0);
     let mut side_left = vec![1.0_f32; FRAMES];
     let mut side_right = vec![0.0_f32; FRAMES];
@@ -832,6 +856,18 @@ fn processor_uses_external_sidechain_for_live_compression() {
     let expected = 10.0_f32.powf(-15.0 / 20.0);
     assert!((fixture.output_left[FRAMES - 1] - expected).abs() < 0.001);
     assert!((fixture.output_right[FRAMES - 1] - expected * 0.5).abs() < 0.001);
+    let preview = shared.status.compressor_preview_snapshot().unwrap();
+    assert!(preview
+        .iter()
+        .flatten()
+        .any(|gain| (gain - expected).abs() < 0.001));
+    assert_eq!(unsafe { processor.setProcessing(0) }, kResultOk);
+    assert!(shared.status.compressor_preview_snapshot().is_none());
+    assert!(shared
+        .status
+        .sidechain_waveform_buffer()
+        .snapshot()
+        .is_none());
 }
 
 #[test]

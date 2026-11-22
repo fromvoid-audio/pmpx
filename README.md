@@ -123,8 +123,12 @@ Pump's sidechain input in your DAW. The compressor also offers automatic
 release, soft clipping and a lightweight 2× oversampling option. This is Pump's
 own compressor, not a model of Ableton's Glue Compressor.
 
-While live compression is on it replaces the drawn envelope. To freeze it,
-choose Sync with Delay at zero, turn detector listen and bypass off, start host
+Turn on the waveform row’s SIDECHAIN button to overlay the routed input in
+blue on the track waveform. The overlay follows the same Sync/Live display
+mode and can be shown with the compressor off.
+
+While compression is active, the coral gain curve updates live in the plot.
+To freeze it, choose Sync with Delay at zero, turn detector listen and bypass off, start host
 playback, then press `CAPTURE`. Pump waits for the next cycle boundary and
 records one full cycle. It turns compression off and replaces the drawn curve
 with an editable approximation. Capture accounts for Pump's Mix and adjusts

@@ -1004,6 +1004,7 @@ pub(crate) enum EditorMessage {
     ToggleTimingMode,
     ToggleTimingDropdown,
     ToggleWaveformMode,
+    ToggleSidechainWaveform,
     ToggleHotkeyHelp,
     CaptureCompressor,
     CancelCompressorCapture,
@@ -1891,6 +1892,7 @@ fn reduce_editor_message(state: &mut PumpEditorState, message: EditorMessage) {
                 .status
                 .set_waveform_live_mode(!state.status.waveform_live_mode());
         }
+        EditorMessage::ToggleSidechainWaveform => state.status.toggle_sidechain_waveform(),
         EditorMessage::CaptureCompressor => {
             if state.params.compressor()[0] < 0.5 {
                 state.capture_message = Some("Enable compression to capture".to_owned());

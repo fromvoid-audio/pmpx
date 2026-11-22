@@ -71,6 +71,7 @@ const CURVE_OFFSET_INSET: f32 = PUMP_VISUAL_METRICS.space_8;
 const CURVE_NODE_HIT_RADIUS: f32 = 10.0;
 const CURVE_NODE_SIZE: f32 = 3.0;
 const CURVE_STROKE_WIDTH: f32 = 1.6;
+const SIDECHAIN_WAVEFORM_COLOR: PumpColor = PumpColor::rgb(114, 189, 229);
 const CURVE_SEGMENT_MOVE_COLOR: PumpColor = PumpColor::rgb(96, 176, 255);
 const CURVE_OFFSET_MOVE_COLOR: PumpColor = PumpColor::rgb(255, 168, 88);
 const CURVE_OFFSET_HOVER_COLOR: PumpColor = CURVE_OFFSET_MOVE_COLOR.with_alpha(224);
@@ -1024,37 +1025,39 @@ pub fn new_screenshot_gui_with_params() -> (
     (gui, params, status)
 }
 
-/// Seed the fixture with one coherent incoming cycle so screenshot coverage
-/// exercises both the source and processed waveform layers. The production
-/// audio thread uses the same writer; this helper only makes the native
-/// capture deterministic without starting an audio host.
+/// Seed a coherent cycle for native waveform and compressor preview tests.
 #[cfg(feature = "screenshot-test")]
 #[doc(hidden)]
-pub fn seed_screenshot_waveform(status: &crate::GuiStatus) {
-    use crate::incoming_waveform::{IncomingWaveformWriter, INCOMING_WAVEFORM_BIN_COUNT};
+pub fn seed_screenshot_waveform(status: &crate::GuiStatus, params: &PumpParams) {
+    use crate::incoming_waveform::{WaveformWriters, INCOMING_WAVEFORM_BIN_COUNT};
 
-    let buffer = status.incoming_waveform_buffer();
-    status.set_waveform_live_mode(true);
-    let mut writer = IncomingWaveformWriter::default();
-    for index in 0..=(INCOMING_WAVEFORM_BIN_COUNT * 2) {
-        let phase = index as f32 / (INCOMING_WAVEFORM_BIN_COUNT * 2) as f32;
-        writer.begin_block(buffer);
+    let settings = crate::sample_automation::dsp_settings_from_params(params);
+    let frames = INCOMING_WAVEFORM_BIN_COUNT * 2;
+    let mut writers = WaveformWriters::default();
+    status.mark_waveforms_unavailable();
+    let mut capture = writers.begin_block(status, true, frames);
+    for index in 0..frames {
+        let phase = index as f32 / frames as f32;
         let carrier = (phase * std::f32::consts::TAU * 2.0).sin().abs();
         let envelope = 0.18 + 0.75 * (phase * std::f32::consts::TAU).sin().abs();
-        writer.record_with_cycle_mapping_and_timing_mode(
-            buffer,
+        let sidechain = (phase * std::f32::consts::TAU).cos().abs().powi(5);
+        capture.record(
             phase,
-            phase,
-            1.0,
-            0,
-            0.0,
-            crate::params::TIMING_MODE_SYNC,
-            carrier * envelope,
-            carrier * envelope * 0.82,
+            crate::dsp::DspTelemetry {
+                phase,
+                applied_phase_offset: 0.0,
+                gain: 1.0,
+                reduction_gain: 1.0,
+                compressor_envelope_gain: Some(1.0 - 0.7 * sidechain),
+                input_active: true,
+                bypassed: false,
+            },
+            &settings,
+            [carrier * envelope, carrier * envelope * 0.82],
+            Some([sidechain, 0.0]),
         );
-        writer.finish_block(buffer);
     }
-    status.set_waveform_live_mode(false);
+    capture.finish(&settings, frames);
 }
 
 /// Publish a deterministic completed take for the native editor input fixture.
@@ -1228,6 +1231,7 @@ impl PumpEditor {
             "sound-b",
             "hotkey-help",
             "waveform-mode",
+            "sidechain-waveform",
             "bypass",
             "compressor-panel",
             "compressor-capture",
@@ -3020,6 +3024,7 @@ impl PumpEditor {
             "sound-b",
             "hotkey-help",
             "waveform-mode",
+            "sidechain-waveform",
             "compressor-panel",
             "compressor-capture",
             "bypass",
@@ -3081,6 +3086,10 @@ impl PumpEditor {
             "waveform-mode" => {
                 self.dismiss_timing_dropdown(cx);
                 self.dispatch(EditorMessage::ToggleWaveformMode, cx);
+            }
+            "sidechain-waveform" => {
+                self.dismiss_timing_dropdown(cx);
+                self.dispatch(EditorMessage::ToggleSidechainWaveform, cx);
             }
             "compressor-panel" => {
                 self.compressor_panel_open = !self.compressor_panel_open;
@@ -3307,6 +3316,41 @@ fn draw_waveform_layer(
     }
 }
 
+fn draw_compressor_preview(
+    left: f32,
+    top: f32,
+    width: f32,
+    height: f32,
+    samples: &crate::incoming_waveform::CompressorPreviewSnapshot,
+    window: &mut Window,
+) {
+    let step = (width - 1.0).max(1.0) / (samples.len() - 1) as f32;
+    let mut path = gpui::PathBuilder::stroke(px(2.0));
+    let mut connected = false;
+    for (index, sample) in samples.iter().copied().enumerate() {
+        let Some(gain) = sample else {
+            connected = false;
+            continue;
+        };
+        let x = left + index as f32 * step;
+        let y = top + (1.0 - gain) * (height - 1.0).max(1.0);
+        let position = point(px(x), px(y));
+        if connected {
+            path.line_to(position);
+        } else {
+            let dot_left = (x - 0.5).max(left);
+            let dot_right = (x + 0.5).min(left + width - 1.0);
+            path.move_to(point(px(dot_right), px(y)));
+            path.line_to(point(px(dot_left), px(y)));
+            path.line_to(position);
+            connected = true;
+        }
+    }
+    if let Ok(path) = path.build() {
+        window.paint_path(path, solid(pump_theme().accent_copper));
+    }
+}
+
 fn curve_point_pixels(
     left: f32,
     top: f32,
@@ -3417,6 +3461,8 @@ fn draw_curve(
     let applied_phase = dsp_snapshot
         .map(|snapshot| snapshot.applied_phase_offset)
         .unwrap_or(phase);
+    let compressor = state.params().compressor();
+    let compressor_enabled = compressor[0] >= 0.5;
     if let Some(waveform) = state.status().incoming_waveform_snapshot() {
         draw_waveform_layer(
             left,
@@ -3428,7 +3474,7 @@ fn draw_curve(
             1.0,
             window,
         );
-        if state.params().compressor()[0] < 0.5 {
+        if !compressor_enabled {
             let processed = super::projection::processed_waveform(
                 &curve,
                 &waveform,
@@ -3448,7 +3494,21 @@ fn draw_curve(
             );
         }
     }
-    if state.params().compressor()[0] < 0.5 && state.params().smooth() > f32::EPSILON {
+    if state.status().sidechain_waveform_visible() {
+        if let Some(waveform) = state.status().sidechain_waveform_buffer().snapshot() {
+            draw_waveform_layer(
+                left,
+                top,
+                width,
+                height,
+                &waveform,
+                SIDECHAIN_WAVEFORM_COLOR.with_alpha(205),
+                1.2,
+                window,
+            );
+        }
+    }
+    if !compressor_enabled && state.params().smooth() > f32::EPSILON {
         let mut smooth_path = gpui::PathBuilder::stroke(px(1.0));
         let samples = 96;
         for index in 0..=samples {
@@ -3508,8 +3568,8 @@ fn draw_curve(
     if state.params().effects()[0] >= 0.5 || !state.filter_enabled() {
         draw_crossover_preview(curve_bounds, state, window, cx);
     }
-    let curve_color = if state.params().compressor()[0] >= 0.5 {
-        theme.text_muted
+    let curve_color = if compressor_enabled {
+        theme.text_muted.with_alpha(130)
     } else if active_offset {
         CURVE_OFFSET_MOVE_COLOR
     } else if modifier_offset_hover {
@@ -3519,6 +3579,11 @@ fn draw_curve(
     };
     if let Ok(path) = path.build() {
         window.paint_path(path, solid(curve_color));
+    }
+    if compressor_enabled && !state.params().bypassed() && compressor[16] < 0.5 {
+        if let Some(gain) = state.status().compressor_preview_snapshot() {
+            draw_compressor_preview(left, top, width, height, &gain, window);
+        }
     }
     let move_segment = state
         .active_segment()
@@ -5722,6 +5787,26 @@ impl Render for PumpEditor {
         )
         .h(px(FOOTER_HEIGHT));
         waveform_button = waveform_button.on_click(cx.listener(Self::toggle_waveform));
+        let sidechain_visible = state.status().sidechain_waveform_visible();
+        let mut sidechain_button = button(
+            "sidechain-waveform",
+            "SIDECHAIN".into(),
+            sidechain_visible,
+            82.0,
+            Some(self.button_focus_handle("sidechain-waveform")),
+        )
+        .h(px(FOOTER_HEIGHT))
+        .on_click(cx.listener(|view, event: &gpui::ClickEvent, _, cx| {
+            if !event.is_keyboard() {
+                view.activate_focused_button("sidechain-waveform", cx);
+            }
+        }));
+        if sidechain_visible {
+            sidechain_button = sidechain_button
+                .border_color(solid(SIDECHAIN_WAVEFORM_COLOR))
+                .bg(solid(SIDECHAIN_WAVEFORM_COLOR.with_alpha(44)))
+                .text_color(solid(SIDECHAIN_WAVEFORM_COLOR));
+        }
         let mut bypass_button = button(
             "bypass",
             String::new(),
@@ -5845,26 +5930,31 @@ impl Render for PumpEditor {
             .child(
                 div()
                     .flex()
+                    .flex_shrink_0()
                     .items_center()
                     .gap(px(PUMP_VISUAL_METRICS.space_4))
                     .child(group_heading("WAVEFORM"))
-                    .child(waveform_button),
+                    .child(waveform_button)
+                    .child(sidechain_button),
             )
             .child(
                 div()
                     .flex()
                     .items_center()
                     .gap(px(4.0))
-                    .child(compressor_panel)
-                    .child(compressor_capture)
+                    .min_w(px(0.0))
+                    .child(compressor_panel.flex_shrink_0())
+                    .child(compressor_capture.flex_shrink_0())
                     .child(
                         div()
+                            .min_w(px(0.0))
+                            .truncate()
                             .text_size(px(8.0))
                             .text_color(solid(theme.text_muted))
                             .child(capture_message),
                     ),
             )
-            .child(bypass_button);
+            .child(bypass_button.flex_shrink_0());
         let hotkey_help = if state.hotkey_help_open() {
             const ROWS: [(&str, &str); 10] = [
                 ("Cmd/Ctrl + Z / u", "Undo"),
