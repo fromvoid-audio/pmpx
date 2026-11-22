@@ -145,6 +145,8 @@ mod analyzer {
     const PLOT_POINTS: usize = 128;
     const FLOOR_DB: f32 = -84.0;
     const STALE_MICROS: u64 = 200_000;
+    const ATTACK_SECONDS: f32 = 0.055;
+    const RELEASE_SECONDS: f32 = 0.16;
     const AMPLITUDE_SCALE: f32 = 4.0 / WINDOW_SAMPLES as f32;
 
     pub(crate) type SpectrumTrace = [f32; PLOT_POINTS];
@@ -194,7 +196,7 @@ mod analyzer {
     }
 
     impl SpectrumAnalyzer {
-        /// Return line heights on the log-frequency axis, with a short release.
+        /// Return the smoothed PRE and POST heights on the same log-frequency axis.
         pub(crate) fn update(&mut self, input: &SpectrumInput, now: u64) -> Option<SpectrumTraces> {
             let generation = input.generation();
             if generation != self.generation {
@@ -214,14 +216,16 @@ mod analyzer {
             }
             let seconds = now.saturating_sub(self.last_frame) as f32 / 1_000_000.0;
             self.last_frame = now;
-            let release = (-seconds / 0.14).exp();
+            let attack = (-seconds / ATTACK_SECONDS).exp();
+            let release = (-seconds / RELEASE_SECONDS).exp();
             for (displayed, &target) in self
                 .displayed_db
                 .iter_mut()
                 .flatten()
                 .zip(self.target_db.iter().flatten())
             {
-                *displayed = target.max(target + (*displayed - target) * release);
+                let retention = if target > *displayed { attack } else { release };
+                *displayed = target + (*displayed - target) * retention;
             }
             self.displayed_db
                 .iter()
@@ -261,12 +265,14 @@ mod analyzer {
                         *total += sample.norm_sqr() * 0.5;
                     }
                 }
-                for (index, target) in target_db.iter_mut().enumerate() {
+                let mut plot_power = [0.0; PLOT_POINTS];
+                let mut valid_points = 0;
+                for (index, power) in plot_power.iter_mut().enumerate() {
                     let center = fft_bin_at_plot_point(index as f32, sample_rate);
                     if center > (self.power.len() - 1) as f32 {
-                        *target = FLOOR_DB;
-                        continue;
+                        break;
                     }
+                    valid_points += 1;
                     // Interpolate between bins at the low end. At the high end,
                     // preserve any narrow peak inside the wider log-frequency bucket.
                     let bin = (center as usize).max(1);
@@ -284,7 +290,18 @@ mod analyzer {
                             peak = peak.max(power);
                         }
                     }
-                    *target = (10.0 * peak.log10()).clamp(FLOOR_DB, 0.0);
+                    *power = peak;
+                }
+                target_db.fill(FLOOR_DB);
+                let plot_power = &plot_power[..valid_points];
+                // Blend neighboring log-frequency samples in power so quiet
+                // neighbors do not pull narrow peaks all the way to the floor.
+                for (index, target) in target_db.iter_mut().take(valid_points).enumerate() {
+                    let at = |offset| {
+                        plot_power[index.saturating_add_signed(offset).min(valid_points - 1)]
+                    };
+                    let power = 0.66 * at(0) + 0.13 * (at(-1) + at(1)) + 0.04 * (at(-2) + at(2));
+                    *target = (10.0 * power.log10()).clamp(FLOOR_DB, 0.0);
                 }
             }
         }
@@ -338,6 +355,7 @@ mod tests {
                 analyzer::fft_bin_at_plot_point(index as f32, rate) * rate / WINDOW_SAMPLES as f32;
             assert!((hz - tone).abs() < 40.0, "{hz}");
             assert!(peak > 0.90 && peak < 0.94, "{peak}");
+            assert!(trace.pre[index - 2] > 0.65 && trace.pre[index + 2] > 0.65);
             assert!(trace.pre[0] < 0.03);
             assert!((peak - trace.post[index] - 6.0206 / 84.0).abs() < 0.002);
             assert!(trace.pre[trace.pre.len() - 1] < 0.03);
@@ -345,6 +363,29 @@ mod tests {
             assert!(decaying.pre[index] < 0.1);
             assert!(analyzer.update(&input, 2_000_000).is_none());
         }
+    }
+
+    #[test]
+    fn track_spectrum_eases_into_new_levels_and_keeps_bypass_traces_aligned() {
+        let input = SpectrumInput::default();
+        let mut writer = SpectrumWriter::default();
+        let mut analyzer = SpectrumAnalyzer::default();
+        input.set_enabled(true);
+        assert!(analyzer.update(&input, 1_000_000).is_none());
+        assert!(writer.begin_block(&input, 48_000.0));
+        for index in 0..WINDOW_SAMPLES {
+            let phase = std::f32::consts::TAU * 80.0 * index as f32 / WINDOW_SAMPLES as f32;
+            let sample = [0.5 * phase.sin(); 2];
+            writer.record(&input, sample, sample);
+        }
+
+        let first = analyzer.update(&input, 1_020_000).unwrap();
+        let later = analyzer.update(&input, 1_140_000).unwrap();
+        assert_eq!(first.pre, first.post);
+        assert_eq!(later.pre, later.post);
+        let peak = |trace: &[f32]| trace.iter().copied().fold(0.0_f32, f32::max);
+        assert!((0.20..0.35).contains(&peak(&first.pre)));
+        assert!(peak(&later.pre) > 0.80);
     }
 
     #[test]
