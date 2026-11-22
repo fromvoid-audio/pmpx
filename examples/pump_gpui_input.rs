@@ -668,6 +668,30 @@ mod macos {
             "the plot should start directly below the header"
         );
 
+        // A flat mid-gain curve puts the two strokes at exactly the same height.
+        let original_curve = params.editable_curve_snapshot();
+        let mut flat_curve = original_curve.clone();
+        for node in &mut flat_curve.nodes {
+            node.y = 0.5;
+        }
+        params.set_editable_curve(&flat_curve);
+        params.set_smooth(0.5);
+        pump_appkit(app, &gui, 0.04);
+        let pale_blue = |pixel: &[u8]| {
+            pixel[0] > 140
+                && pixel[1] > 195
+                && pixel[2] > 232
+                && pixel[2].saturating_sub(pixel[0]) > 60
+        };
+        assert!(
+            count_plot_pixels(&gui, pale_blue) > 350,
+            "the smoothed stroke should be visible over the editable stroke"
+        );
+        params.set_smooth(0.0);
+        pump_appkit(app, &gui, 0.04);
+        assert_eq!(count_plot_pixels(&gui, pale_blue), 0);
+        params.set_editable_curve(&original_curve);
+
         let transport = pump::GuiTransportTelemetry {
             is_playing: false,
             transport_is_playing: true,

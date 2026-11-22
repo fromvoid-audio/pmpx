@@ -4,7 +4,7 @@ The editor follows the supplied Technical Futurist Interface Style Guide: layere
 
 The header places “PORTALSURFER / PUMP” on the left and timing, history, A/B, and help controls on the right. The actual package version remains tiny and subdued at the extreme top-right. The envelope plot shows waveform and gain over time, with offset editing and a gain-reduction meter. The plot starts below the header, with presets directly beneath it.
 
-The parameter deck groups Smooth and Swing under Shape and the Mix and Output knobs under Level. Free timing also exposes the Rate knob under Level.
+The parameter deck groups Smooth and Swing under Shape and the Mix and Output knobs under Level. In the normal envelope editor, the light-blue Smooth slider fill matches the smoothed trace above the editable curve. Free timing also exposes the Rate knob under Level.
 
 The dynamics icon at the left edge opens the compressor panel and enables compression. Closing the panel disables compression. The panel has a vertical threshold fader, a live gain-reduction meter, rotary controls and a dedicated sidechain section. Capture sits at the bottom with progress and error feedback beside it.
 

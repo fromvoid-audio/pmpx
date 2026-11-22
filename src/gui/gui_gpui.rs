@@ -75,6 +75,7 @@ const CURVE_OFFSET_INSET: f32 = PUMP_VISUAL_METRICS.space_8;
 const CURVE_NODE_HIT_RADIUS: f32 = 10.0;
 const CURVE_NODE_SIZE: f32 = 3.0;
 const CURVE_STROKE_WIDTH: f32 = 1.6;
+const SMOOTH_CURVE_COLOR: PumpColor = PumpColor::rgb(165, 222, 255);
 const SIDECHAIN_WAVEFORM_COLOR: PumpColor = PumpColor::rgb(114, 189, 229);
 const CURVE_SEGMENT_MOVE_COLOR: PumpColor = PumpColor::rgb(96, 176, 255);
 const CURVE_OFFSET_MOVE_COLOR: PumpColor = PumpColor::rgb(255, 168, 88);
@@ -3958,28 +3959,6 @@ fn draw_curve(
             );
         }
     }
-    if !compressor_enabled && state.params().smooth() > f32::EPSILON {
-        let mut smooth_path = gpui::PathBuilder::stroke(px(1.0));
-        let samples = 96;
-        for index in 0..=samples {
-            let display_phase = index as f32 / samples as f32;
-            let authored = crate::dsp::authored_curve_phase(display_phase, phase);
-            let y =
-                super::projection::sample_smoothed_curve(&curve, authored, state.params().smooth());
-            let sample_point = point(
-                px(left + display_phase * (width - 1.0).max(1.0)),
-                px(top + (1.0 - y) * (height - 1.0).max(1.0)),
-            );
-            if index == 0 {
-                smooth_path.move_to(sample_point);
-            } else {
-                smooth_path.line_to(sample_point);
-            }
-        }
-        if let Ok(path) = smooth_path.build() {
-            window.paint_path(path, solid(theme.accent_warning.with_alpha(180)));
-        }
-    }
     let active_offset = state.active_curve_offset();
     let modifier_offset_hover = state.command_hover_held()
         && state.shift_hover_held()
@@ -4038,6 +4017,35 @@ fn draw_curve(
         window.with_content_mask(mask, |window| {
             window.paint_path(path, solid(curve_color));
         });
+    }
+    let smooth = state.params().smooth();
+    if !compressor_enabled && smooth > f32::EPSILON {
+        let mut smooth_path = gpui::PathBuilder::stroke(px(1.75));
+        let samples = 96;
+        for index in 0..=samples {
+            let display_phase = index as f32 / samples as f32;
+            let authored = crate::dsp::authored_curve_phase(display_phase, phase);
+            let y = super::projection::sample_smoothed_curve(&curve, authored, smooth);
+            let sample_point = point(
+                px(left + display_phase * (width - 1.0).max(1.0)),
+                px(top + (1.0 - y) * (height - 1.0).max(1.0)),
+            );
+            if index == 0 {
+                smooth_path.move_to(sample_point);
+            } else {
+                smooth_path.line_to(sample_point);
+            }
+        }
+        if let Ok(path) = smooth_path.build() {
+            window.with_content_mask(
+                Some(gpui::ContentMask {
+                    bounds: curve_bounds,
+                }),
+                |window| {
+                    window.paint_path(path, solid(SMOOTH_CURVE_COLOR));
+                },
+            );
+        }
     }
     if let Some(gain) = compressor_preview {
         draw_compressor_preview(left, top, width, height, gain, window);
@@ -5201,7 +5209,16 @@ impl PumpEditor {
             "SWING"
         };
         let input = self.numeric_inputs[Self::numeric_input_index(target)].clone();
-        let normalized = knob_value(&self.state.borrow(), target).0;
+        let (normalized, fill_color) = {
+            let state = self.state.borrow();
+            let color =
+                if target == NumericEntryTarget::Smooth && state.params().compressor()[0] < 0.5 {
+                    SMOOTH_CURVE_COLOR
+                } else {
+                    theme.accent_mint
+                };
+            (knob_value(&state, target).0, color)
+        };
         let bounds = Rc::new(RefCell::new(None::<Bounds<Pixels>>));
         let paint_bounds = Rc::clone(&bounds);
         let track = canvas(
@@ -5230,7 +5247,7 @@ impl PumpEditor {
                             point(left, center - px(1.5)),
                             point(left + (right - left) * normalized, center + px(1.5)),
                         ),
-                        solid(theme.accent_mint),
+                        solid(fill_color),
                     ));
                 }
             },
