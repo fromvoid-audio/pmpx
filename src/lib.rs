@@ -181,7 +181,7 @@ impl DefaultPluginFactory for PumpPlugin {
                 Arc::clone(&shared.params),
                 Arc::clone(&shared.status),
                 Arc::clone(&shared.automation_queue),
-                crate::gui::gui_gpui::HostParamFlushRequester::new(host_shared),
+                host_shared,
             ),
             automation_drain: Vec::new(),
         })
@@ -206,7 +206,7 @@ pub struct PumpMainThread<'a> {
     shared: &'a PumpShared,
     /// Host-parented editor wrapper.
     #[cfg(all(any(target_os = "macos", target_os = "windows"), feature = "gpui-gui"))]
-    gui: toybox::gpui_gui::GpuiHostedGui,
+    gui: crate::gui::gui_gpui::ClapEditorGui,
     /// Scratch vector for draining queued automation events.
     automation_drain: Vec<AutomationEvent>,
 }

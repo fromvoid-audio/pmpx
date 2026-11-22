@@ -182,20 +182,7 @@ impl IEditControllerTrait for PumpVst3Controller {
                 return ptr::null_mut();
             }
 
-            let adapter = PumpVst3GuiAdapter::new(self.shared.clone());
-            let (default_width, default_height) = preferred_window_size();
-            let Some(view) = ComWrapper::new(
-                HostedVst3View::new(adapter, default_width, default_height).with_size_bounds(
-                    MIN_WINDOW_WIDTH,
-                    MIN_WINDOW_HEIGHT,
-                    MAX_WINDOW_WIDTH,
-                    MAX_WINDOW_HEIGHT,
-                ),
-            )
-            .to_com_ptr::<IPlugView>() else {
-                return ptr::null_mut();
-            };
-            ComPtr::into_raw(view)
+            super::gui_adapter::PumpVst3EditorView::create(self.shared.clone())
         }
     }
 }

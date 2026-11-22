@@ -45,6 +45,15 @@ mod macos {
             Self { window, view }
         }
 
+        unsafe fn sync_host_size(&self) -> u32 {
+            let children: id = msg_send![self.view, subviews];
+            let child: id = msg_send![children, lastObject];
+            assert!(!child.is_null(), "Pump GPUI native child view");
+            let frame: NSRect = msg_send![child, frame];
+            self.window.setContentSize_(frame.size);
+            frame.size.width as u32
+        }
+
         fn parent_handle(&self) -> RawWindowHandle {
             let mut handle = AppKitWindowHandle::empty();
             handle.ns_view = NonNull::new(self.view as *mut _)
@@ -360,24 +369,39 @@ mod macos {
                 comp_x,
                 comp_y,
             );
-            pump_appkit(app, &gui, 0.10);
+            pump_appkit(app, &gui, 0.06);
+            let expanded_width = fixture.sync_host_size();
+            let (filter_x, filter_y) = center("filter-panel");
+            send_click(
+                fixture.window,
+                expanded_width,
+                CAPTURE_HEIGHT,
+                filter_x,
+                filter_y,
+            );
+            pump_appkit(app, &gui, 0.06);
+            let expanded_width = fixture.sync_host_size();
+            assert_eq!(expanded_width, 1232);
             capture(
                 app,
                 &fixture,
                 &gui,
                 &root,
-                "pump-compressor-640x400",
-                640,
+                "pump-panels-1232x400",
+                expanded_width,
                 400,
             );
+            let (close_x, close_y) = center("close-compressor");
             send_click(
                 fixture.window,
-                CAPTURE_WIDTH,
+                expanded_width,
                 CAPTURE_HEIGHT,
-                comp_x,
-                comp_y,
+                close_x,
+                close_y,
             );
-            pump_appkit(app, &gui, 0.10);
+            pump_appkit(app, &gui, 0.06);
+            let expanded_width = fixture.sync_host_size();
+            assert_eq!(expanded_width, 896);
 
             params.set_filter_enabled(1.0);
             params.set_filter_hp_freq_hz(320.0);
@@ -391,10 +415,20 @@ mod macos {
                 &fixture,
                 &gui,
                 &root,
-                "pump-filter-enabled-640x400",
-                640,
+                "pump-filter-enabled-896x400",
+                expanded_width,
                 400,
             );
+            let (close_x, close_y) = center("close-filter");
+            send_click(
+                fixture.window,
+                expanded_width,
+                CAPTURE_HEIGHT,
+                close_x,
+                close_y,
+            );
+            pump_appkit(app, &gui, 0.06);
+            assert_eq!(fixture.sync_host_size(), CAPTURE_WIDTH);
             params.set_filter_enabled(0.0);
 
             let curve_before_seam = params.editable_curve_snapshot();

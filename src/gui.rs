@@ -1,7 +1,5 @@
 //! Shared Pump editor contract and layout helpers.
 
-use toybox::clack_extensions::gui::GuiSize;
-
 use crate::curve::{CurveNode, EditableCurve};
 
 #[cfg(all(
@@ -30,6 +28,10 @@ pub const WINDOW_HEIGHT: u32 = 400;
 /// Maximum supported logical editor size.
 pub const MAX_WINDOW_WIDTH: u32 = 1280;
 pub const MAX_WINDOW_HEIGHT: u32 = 800;
+pub(crate) const COMPRESSOR_PANEL_WIDTH: u32 = 336;
+pub(crate) const FILTER_PANEL_WIDTH: u32 = 256;
+pub(crate) const MAX_EXPANDED_WIDTH: u32 =
+    MAX_WINDOW_WIDTH + COMPRESSOR_PANEL_WIDTH + FILTER_PANEL_WIDTH;
 
 const PRESET_WARNING_STORAGE: &str = "NOT SAVED - CHECK PRESET FOLDER";
 
@@ -37,23 +39,6 @@ const PRESET_WARNING_STORAGE: &str = "NOT SAVED - CHECK PRESET FOLDER";
 #[allow(dead_code)]
 pub(crate) fn preferred_window_size() -> (u32, u32) {
     (WINDOW_WIDTH, WINDOW_HEIGHT)
-}
-
-/// Normalize a host request to the supported 8:5 logical contract.
-#[allow(dead_code)]
-pub(crate) fn normalize_host_size(size: GuiSize) -> GuiSize {
-    let width = size.width.clamp(MIN_WINDOW_WIDTH, MAX_WINDOW_WIDTH);
-    let height = size.height.clamp(MIN_WINDOW_HEIGHT, MAX_WINDOW_HEIGHT);
-    let scale = (width as f64 / WINDOW_WIDTH as f64)
-        .min(height as f64 / WINDOW_HEIGHT as f64)
-        .clamp(
-            MIN_WINDOW_WIDTH as f64 / WINDOW_WIDTH as f64,
-            MAX_WINDOW_WIDTH as f64 / WINDOW_WIDTH as f64,
-        );
-    GuiSize {
-        width: (WINDOW_WIDTH as f64 * scale).round() as u32,
-        height: (WINDOW_HEIGHT as f64 * scale).round() as u32,
-    }
 }
 
 #[derive(Clone, Debug, Default, PartialEq)]
@@ -264,30 +249,6 @@ mod tests {
         assert_eq!(
             build_version_label(),
             format!("v{}", env!("CARGO_PKG_VERSION"))
-        );
-    }
-
-    #[test]
-    fn normalized_host_size_preserves_contract() {
-        assert_eq!(
-            normalize_host_size(GuiSize {
-                width: 1,
-                height: 1
-            }),
-            GuiSize {
-                width: 640,
-                height: 400
-            }
-        );
-        assert_eq!(
-            normalize_host_size(GuiSize {
-                width: 5000,
-                height: 5000
-            }),
-            GuiSize {
-                width: 1280,
-                height: 800
-            }
         );
     }
 

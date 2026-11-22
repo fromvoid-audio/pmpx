@@ -2,15 +2,13 @@
 
 The editor follows the supplied Technical Futurist Interface Style Guide: layered neutral-gray surfaces, restrained muted-coral emphasis, monospaced labels, thin functional rails, and a dominant envelope plot. Mint LP and blue HP distinguish frequency responses from the envelope.
 
-The header places “PORTALSURFER / PUMP” on the left and timing, history, A/B, and help controls on the right. The actual package version remains tiny and subdued at the extreme top-right. The envelope keeps its full-area crossover overlay, offset editing, waveform display, and gain-reduction meter. The plot starts below the header, with presets directly beneath it.
+The header places “PORTALSURFER / PUMP” on the left and timing, history, A/B, and help controls on the right. The actual package version remains tiny and subdued at the extreme top-right. The envelope plot shows waveform and gain over time, with offset editing and a gain-reduction meter. The plot starts below the header, with presets directly beneath it.
 
-The parameter deck has three aligned groups:
+The parameter deck groups Smooth and Swing under Shape and the Mix and Output knobs under Level. Free timing also exposes the Rate knob under Level.
 
-- **Shape:** handle-free Smooth and Swing sliders with editable values.
-- **Bands:** crossover slope and stacked LP/HP mix bars with internal percentages and Solo controls. Visible bars remain 80 × 14 px, with larger native drag targets.
-- **Level:** Mix and Output knobs. Free timing also exposes the Rate knob here.
+The COMP button opens a panel on the left with a vertical threshold fader, a live gain-reduction meter, rotary controls and a dedicated sidechain section. Capture feedback appears next to Capture in the footer.
 
-The COMP button opens a deck with rotary compressor and sidechain controls plus grouped switches. Capture feedback appears next to Capture in the footer. Existing automation IDs, DSP, keyboard actions, undo, value entry, and persistence remain intact. No spectral feature is introduced.
+The FILTER button opens a panel on the right with a frequency-response plot, crossover slope, LP/HP mix bars and Solo controls. The panels open independently and request additional width at the current window height. If the host keeps the current size, the panel opens over the editor and can be closed from its header.
 
 The Frame composition is a visual reference; native control behavior belongs to Pump. Native macOS/Windows rendering requires validation on those platforms.
 

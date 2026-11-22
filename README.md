@@ -91,14 +91,11 @@ The curve is sampled in real time and applied to stereo gain for controlled pump
 - `Phase Offset`: shifts where the curve starts in the sync cycle. In Sync,
   raw Offset 0 is the host-cycle/transport origin.
 - `Output Gain`: level trim after ducking.
-- `Filter`: limits pumping to the selected frequency band. Turn it on to show
-  the overlay over the curve editor: drag the HP and LP handles to set each
-  cutoff and Q, or drag the center handle to move the whole band while keeping
-  its width. Select an HP or LP handle to expose its Frequency and Q knobs and
-  choose a 12, 24, or 48 dB/oct slope. The center handle remains a shared band
-  drag control. Filter controls disappear when Filter is off. The combined
-  response is normalized so close cutoffs do not dilute the pumping depth at
-  the response peak.
+- `FILTER` opens the right-hand panel with a dedicated frequency-response plot, crossover,
+  slope, band mix and Solo. If a legacy selective filter is active, drag the HP
+  and LP handles to set their cutoff and Q, or drag the center handle to move
+  the whole band. The selective response is normalized at its peak to preserve
+  pumping depth as the cutoffs approach each other.
 - `Delay`: in Sync mode, holds the cycle-start phase for an integer number of
   quarter-note beats (`0` to `32`) before the selected division runs. The
   control is hidden in Free mode, where the same slot shows `Rate`.
@@ -115,8 +112,9 @@ mapping and compatibility behavior.
 
 ## Sidechain compression and capture
 
-Open `COMP` to enable live compression and adjust its threshold, ratio, attack,
-release, range, makeup and dry/wet controls. The detector can use the main
+Open the left-hand `COMP` panel to enable live compression. It has a vertical
+threshold control, a gain-reduction meter and knobs for ratio, attack, release,
+range, makeup and dry/wet. The detector can use the main
 input, the host's external stereo sidechain, or a blend of the two; its gain,
 filter and listen controls affect the detector. Route the external signal to
 Pump's sidechain input in your DAW. The compressor also offers automatic
@@ -201,4 +199,4 @@ Pump includes a one-crossover, 12/24 dB Linkwitz–Riley dual-band mode. See [co
 
 Smooth and Swing use horizontal sliders without handles; Mix and Output retain their rotary knobs.
 
-The composition groups stacked LP/HP mix sliders beside Mix/Output, with Smooth/Swing in the compact strip immediately below the curve presets. Set the slope in the strip and drag the crossover marker in the plot to adjust its frequency.
+Open `FILTER` to set the slope and drag the crossover marker in the frequency plot. The two side panels open independently and request a wider window at the current height.

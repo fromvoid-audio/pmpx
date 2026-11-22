@@ -70,6 +70,16 @@ mod macos {
             RawWindowHandle::AppKit(handle)
         }
 
+        unsafe fn sync_host_size(&self, width: u32) {
+            let bounds: NSRect = msg_send![self.hosted_view(), bounds];
+            assert_eq!(
+                (bounds.size.width, bounds.size.height),
+                (f64::from(width), f64::from(OUTPUT_HEIGHT))
+            );
+            self.window
+                .setContentSize_(NSSize::new(f64::from(width), f64::from(OUTPUT_HEIGHT)));
+        }
+
         unsafe fn hosted_view(&self) -> id {
             let subviews: id = msg_send![self.view, subviews];
             let count: usize = msg_send![subviews, count];
@@ -317,14 +327,21 @@ mod macos {
         gui: &toybox::gpui_gui::GpuiHostedGui,
         color_matches: impl Fn(&[u8]) -> bool,
     ) -> usize {
-        let (width, height, pixels) = capture_pixels(gui, "waveform and compressor previews");
-        let [left, top, plot_width, plot_height] = pump::gui_gpui::screenshot_bounds("curve-plot");
-        let scale_x = width as f32 / OUTPUT_WIDTH as f32;
-        let scale_y = height as f32 / OUTPUT_HEIGHT as f32;
-        let left_px = (left * scale_x).ceil() as usize;
-        let right_px = ((left + plot_width) * scale_x).floor() as usize;
-        let top_px = (top * scale_y).ceil() as usize;
-        let bottom_px = ((top + plot_height) * scale_y).floor() as usize;
+        count_region_pixels(gui, "curve-plot", color_matches)
+    }
+
+    fn count_region_pixels(
+        gui: &toybox::gpui_gui::GpuiHostedGui,
+        region: &str,
+        color_matches: impl Fn(&[u8]) -> bool,
+    ) -> usize {
+        let (width, height, pixels) = capture_pixels(gui, region);
+        let [left, top, plot_width, plot_height] = pump::gui_gpui::screenshot_bounds(region);
+        let scale = height as f32 / OUTPUT_HEIGHT as f32;
+        let left_px = (left * scale).ceil() as usize;
+        let right_px = ((left + plot_width) * scale).floor() as usize;
+        let top_px = (top * scale).ceil() as usize;
+        let bottom_px = ((top + plot_height) * scale).floor() as usize;
         pixels
             .chunks_exact(width as usize * 4)
             .take(bottom_px)
@@ -364,8 +381,9 @@ mod macos {
             );
             let owner: id = msg_send![area, owner];
             assert_eq!(owner, child, "tracking-area owner must be the GPUI child");
+            let child_bounds: NSRect = msg_send![child, bounds];
             if x < 0.0
-                || x >= f64::from(WINDOW_WIDTH)
+                || x >= child_bounds.size.width
                 || top_y < 0.0
                 || top_y >= f64::from(WINDOW_HEIGHT)
             {
@@ -690,8 +708,6 @@ mod macos {
             "delay-value",
             "slider-Smooth",
             "slider-Swing",
-            "band-3",
-            "band-4",
             "knob-Mix",
             "knob-OutputGain",
             "value-Smooth",
@@ -790,6 +806,14 @@ mod macos {
         );
         send_key(app, fixture.window, &gui, "\u{f700}", 126, 0);
 
+        let base_plot = pump::gui_gpui::screenshot_bounds("curve-plot");
+        click_control(fixture, "filter-panel", 0);
+        pump_appkit(app, &gui, 0.06);
+        fixture.sync_host_size(OUTPUT_WIDTH + 256);
+        assert_eq!(pump::gui_gpui::screenshot_bounds("curve-plot"), base_plot);
+        let [frequency_x, _, _, _] = pump::gui_gpui::screenshot_bounds("frequency-plot");
+        assert!(frequency_x >= OUTPUT_WIDTH as f32);
+
         // Both band bars activate DSP without a separate switch, and one Undo
         // restores the entire drag including its activation.
         for index in [3, 4] {
@@ -834,21 +858,21 @@ mod macos {
             pump::gui_gpui::screenshot_bounds("crossover-marker");
         let x = f64::from(marker_x + marker_width * 0.5 + 4.0);
         let y = f64::from(marker_y + marker_height * 0.25);
-        let [_, _, plot_width, _] = pump::gui_gpui::screenshot_bounds("curve-plot");
+        let [_, _, plot_width, _] = pump::gui_gpui::screenshot_bounds("frequency-plot");
         let bright_gray =
             |pixel: &[u8]| pixel[0] > 180 && pixel[0] == pixel[1] && pixel[1] == pixel[2];
-        let idle = count_plot_pixels(&gui, bright_gray);
+        let idle = count_region_pixels(&gui, "frequency-plot", bright_gray);
         send_mouse_move(fixture.window, x, y);
         pump_appkit(app, &gui, 0.04);
         assert!(
-            count_plot_pixels(&gui, bright_gray) > idle + 40,
+            count_region_pixels(&gui, "frequency-plot", bright_gray) > idle + 40,
             "hover should brighten the crossover line"
         );
         send_click(fixture.window, x, y, 0);
         assert_eq!(params.effects()[..2], [0.0, 200.0]);
         let curve = params.editable_curve_snapshot();
         send_mouse_down(fixture.window, x, y, 0);
-        let end_x = x + f64::from((plot_width - 1.0) / 3.0);
+        let end_x = x + f64::from((plot_width - 17.0) / 3.0);
         send_mouse_dragged(fixture.window, end_x, y, 0);
         send_mouse_up(fixture.window, end_x, y, 0);
         pump_appkit(app, &gui, 0.04);
@@ -858,9 +882,21 @@ mod macos {
         send_key(app, fixture.window, &gui, "z", 6, COMMAND);
         assert_eq!(params.effects()[..2], [0.0, 200.0]);
 
-        // Compressor controls remain within the minimum editor and use native input.
+        // Open COMP with FILTER still open. The editor keeps its width and
+        // shifts to make room on the left.
         click_control(fixture, "compressor-panel", 0);
-        pump_appkit(app, &gui, 0.04);
+        pump_appkit(app, &gui, 0.06);
+        fixture.sync_host_size(OUTPUT_WIDTH + 336 + 256);
+        let [x, y, w, h] = pump::gui_gpui::screenshot_bounds("curve-plot");
+        assert!((x - (base_plot[0] + 336.)).abs() < 0.01);
+        assert_eq!([y, w, h], base_plot[1..]);
+        click_control(fixture, "close-filter", 0);
+        pump_appkit(app, &gui, 0.06);
+        fixture.sync_host_size(OUTPUT_WIDTH + 336);
+        assert_eq!(
+            pump::gui_gpui::screenshot_bounds("curve-plot"),
+            [x, y, w, h]
+        );
         for index in 0..19 {
             let key = format!("compressor-{index}");
             wait_for_control(app, &gui, &key);
@@ -870,7 +906,7 @@ mod macos {
                     && y >= 0.
                     && w > 0.
                     && h > 0.
-                    && x + w <= OUTPUT_WIDTH as f32
+                    && x + w <= 336.
                     && y + h <= OUTPUT_HEIGHT as f32,
                 "{key} outside editor: {x},{y},{w},{h}"
             );
@@ -939,6 +975,9 @@ mod macos {
         assert_eq!(params.compressor()[0], 0.0);
         click_control(fixture, "compressor-panel", 0);
         pump_appkit(app, &gui, 0.04);
+
+        fixture.sync_host_size(OUTPUT_WIDTH);
+        assert_eq!(pump::gui_gpui::screenshot_bounds("curve-plot"), base_plot);
 
         // Mix/Output are retained knobs with independent editable values.
         type_value(app, fixture, &gui, "value-Mix", "62");

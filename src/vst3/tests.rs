@@ -1026,90 +1026,36 @@ fn controller_does_not_advertise_editor_view_on_unsupported_platforms() {
 
 #[test]
 #[cfg(any(target_os = "macos", target_os = "windows"))]
-fn view_enforces_minimum_size() {
-    let (preferred_width, preferred_height) = preferred_window_size();
-    let view = HostedVst3View::new(
-        PumpVst3GuiAdapter::new(Arc::new(PumpVst3Shared::new())),
-        preferred_width,
-        preferred_height,
-    )
-    .with_size_bounds(
-        MIN_WINDOW_WIDTH,
-        MIN_WINDOW_HEIGHT,
-        MAX_WINDOW_WIDTH,
-        MAX_WINDOW_HEIGHT,
-    );
-    let mut rect = view_rect(10, 10);
-    let result = unsafe { view.checkSizeConstraint(&mut rect) };
-    assert_eq!(result, kResultOk);
-    assert_eq!(rect.right - rect.left, MIN_WINDOW_WIDTH as i32);
-    assert_eq!(rect.bottom - rect.top, MIN_WINDOW_HEIGHT as i32);
-}
-
-#[test]
-#[cfg(any(target_os = "macos", target_os = "windows"))]
-fn view_reports_default_size_and_clamps_supported_maximum() {
-    let (preferred_width, preferred_height) = preferred_window_size();
-    let view = HostedVst3View::new(
-        PumpVst3GuiAdapter::new(Arc::new(PumpVst3Shared::new())),
-        preferred_width,
-        preferred_height,
-    )
-    .with_size_bounds(
-        MIN_WINDOW_WIDTH,
-        MIN_WINDOW_HEIGHT,
-        MAX_WINDOW_WIDTH,
-        MAX_WINDOW_HEIGHT,
-    );
-
+fn editor_view_accepts_width_only_resize_within_its_size_limits() {
+    let controller = PumpVst3Controller::new(Arc::new(PumpVst3Shared::new()));
+    let view =
+        unsafe { ComPtr::from_raw(controller.createView(ViewType::kEditor)) }.expect("editor view");
     let mut size = view_rect(0, 0);
     assert_eq!(unsafe { view.getSize(&mut size) }, kResultOk);
     assert_eq!(size.right - size.left, crate::gui::WINDOW_WIDTH as i32);
     assert_eq!(size.bottom - size.top, crate::gui::WINDOW_HEIGHT as i32);
 
-    let mut max_size = view_rect(4_000, 4_000);
-    assert_eq!(unsafe { view.onSize(&mut max_size) }, kResultOk);
-    assert_eq!(max_size.right - max_size.left, MAX_WINDOW_WIDTH as i32);
-    assert_eq!(max_size.bottom - max_size.top, MAX_WINDOW_HEIGHT as i32);
-}
-
-#[test]
-#[cfg(any(target_os = "macos", target_os = "windows"))]
-fn view_normalizes_off_aspect_host_resize_and_preserves_origin() {
-    let (preferred_width, preferred_height) = preferred_window_size();
-    let view = HostedVst3View::new(
-        PumpVst3GuiAdapter::new(Arc::new(PumpVst3Shared::new())),
-        preferred_width,
-        preferred_height,
-    )
-    .with_size_bounds(
-        MIN_WINDOW_WIDTH,
-        MIN_WINDOW_HEIGHT,
-        MAX_WINDOW_WIDTH,
-        MAX_WINDOW_HEIGHT,
-    );
-
     let mut rect = ViewRect {
         left: 12,
         top: 18,
-        right: 1_212,
-        bottom: 618,
+        right: 12 + 1_232,
+        bottom: 18 + 400,
     };
     assert_eq!(unsafe { view.checkSizeConstraint(&mut rect) }, kResultOk);
+    assert_eq!(unsafe { view.onSize(&mut rect) }, kResultOk);
     assert_eq!((rect.left, rect.top), (12, 18));
-    assert_eq!(rect.right - rect.left, 1_200);
-    assert_eq!(rect.bottom - rect.top, 750);
-}
+    assert_eq!(rect.right - rect.left, 1_232);
+    assert_eq!(rect.bottom - rect.top, 400);
 
-#[test]
-#[cfg(any(target_os = "macos", target_os = "windows"))]
-fn vst3_gui_adapter_forwards_normalized_resize_to_host_window() {
-    let adapter = PumpVst3GuiAdapter::new(Arc::new(PumpVst3Shared::new()));
-    adapter.request_resize(MAX_WINDOW_WIDTH * 2, MIN_WINDOW_HEIGHT);
-    assert_eq!(
-        adapter.last_size(),
-        Some((MIN_WINDOW_WIDTH, MIN_WINDOW_HEIGHT))
-    );
+    let mut minimum = view_rect(10, 10);
+    assert_eq!(unsafe { view.checkSizeConstraint(&mut minimum) }, kResultOk);
+    assert_eq!(minimum.right - minimum.left, MIN_WINDOW_WIDTH as i32);
+    assert_eq!(minimum.bottom - minimum.top, MIN_WINDOW_HEIGHT as i32);
+
+    let mut maximum = view_rect(4_000, 4_000);
+    assert_eq!(unsafe { view.onSize(&mut maximum) }, kResultOk);
+    assert_eq!(maximum.right - maximum.left, MAX_EXPANDED_WIDTH as i32);
+    assert_eq!(maximum.bottom - maximum.top, MAX_WINDOW_HEIGHT as i32);
 }
 
 #[test]

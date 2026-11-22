@@ -32,7 +32,7 @@ use crate::params::{
     PARAM_OUTPUT_GAIN_ID, PARAM_SMOOTH_ID, PARAM_SWING_ID, SYNC_DIVISIONS, TIMING_MODE_FREE,
 };
 
-pub(crate) use super::model::HostParamFlushRequester;
+use super::model::HostParamFlushRequester;
 use super::model::{
     clap_edit_sink, CurvePaintSample, CurvePreviewMessage, EditorMessage, FilterHandle,
     FreeRateUnit, HostParamEditSink, KnobMessage, NumericEntryMessage, NumericEntryTarget,
@@ -41,6 +41,7 @@ use super::model::{
 use super::visual_system::{
     pump_meter_colors, pump_theme, PumpColor, PUMP_TYPOGRAPHY, PUMP_VISUAL_METRICS,
 };
+use super::{COMPRESSOR_PANEL_WIDTH, FILTER_PANEL_WIDTH};
 
 /// Preferred logical editor width.
 pub const WINDOW_WIDTH: u32 = super::WINDOW_WIDTH;
@@ -850,19 +851,96 @@ fn text_line(
         .shape_line(text, px(size), &[run], None)
 }
 
+pub(crate) enum ResizeDisposition {
+    ResizeLocally,
+    #[cfg(feature = "vst3")]
+    HostWillResize,
+    Rejected,
+}
+
+pub(crate) type ResizeRequester = Rc<dyn Fn(u32, u32) -> ResizeDisposition>;
+
+type AcceptedClapSize = Rc<Cell<Option<(u32, u32)>>>;
+
+fn clap_resize_requester(
+    host: crate::HostSharedHandle<'_>,
+    accepted_size: AcceptedClapSize,
+) -> ResizeRequester {
+    use toybox::clack_extensions::gui::HostGui;
+    let Some(gui) = host.get_extension::<HostGui>() else {
+        return Rc::new(|_, _| ResizeDisposition::Rejected);
+    };
+    // SAFETY: The callback is held by the host-owned editor and runs on the
+    // main thread. The host handle outlives its plugin and hosted editor.
+    let host = unsafe {
+        std::mem::transmute::<crate::HostSharedHandle<'_>, crate::HostSharedHandle<'static>>(host)
+    };
+    Rc::new(move |width, height| {
+        if gui.request_resize(&host, width, height).is_ok() {
+            accepted_size.set(Some((width, height)));
+            ResizeDisposition::ResizeLocally
+        } else {
+            ResizeDisposition::Rejected
+        }
+    })
+}
+
+// CLAP may acknowledge a plug-in resize without calling set_size. Keep
+// get_size in sync with the accepted request until the host sets a new size.
+pub(crate) struct ClapEditorGui {
+    hosted: toybox::gpui_gui::GpuiHostedGui,
+    accepted_size: AcceptedClapSize,
+}
+
+impl ClapEditorGui {
+    pub(crate) fn last_size(&self) -> Option<(u32, u32)> {
+        self.accepted_size.get().or_else(|| self.hosted.last_size())
+    }
+
+    pub(crate) fn request_resize(&self, width: u32, height: u32) {
+        self.accepted_size.set(None);
+        self.hosted.request_resize(width, height);
+    }
+
+    pub(crate) fn close(&mut self) {
+        self.hosted.close();
+        self.accepted_size.set(None);
+    }
+}
+
+impl std::ops::Deref for ClapEditorGui {
+    type Target = toybox::gpui_gui::GpuiHostedGui;
+
+    fn deref(&self) -> &Self::Target {
+        &self.hosted
+    }
+}
+
+impl std::ops::DerefMut for ClapEditorGui {
+    fn deref_mut(&mut self) -> &mut Self::Target {
+        &mut self.hosted
+    }
+}
+
 /// Construct the CLAP-hosted GPUI editor.
 pub(crate) fn new_gui(
     params: Arc<PumpParams>,
     status: Arc<crate::GuiStatus>,
     automation_queue: Arc<PumpAutomationQueue>,
-    requester: Option<HostParamFlushRequester>,
-) -> toybox::gpui_gui::GpuiHostedGui {
-    new_hosted_gui(
+    host: crate::HostSharedHandle<'_>,
+) -> ClapEditorGui {
+    let accepted_size = Rc::new(Cell::new(None));
+    let hosted = new_hosted_gui(
         "PumpGpuiClapEditorView",
         params,
         status,
-        clap_edit_sink(automation_queue, requester),
-    )
+        clap_edit_sink(automation_queue, HostParamFlushRequester::new(host)),
+        clap_resize_requester(host, Rc::clone(&accepted_size)),
+    );
+    ClapEditorGui {
+        hosted,
+        accepted_size,
+    }
 }
 
 /// Construct the VST3-hosted editor with its format-specific edit sink.
@@ -871,8 +949,9 @@ pub(crate) fn new_gui_with_edit_sink(
     params: Arc<PumpParams>,
     status: Arc<crate::GuiStatus>,
     sink: Arc<dyn HostParamEditSink>,
+    resize: ResizeRequester,
 ) -> toybox::gpui_gui::GpuiHostedGui {
-    new_hosted_gui("PumpGpuiVst3EditorView", params, status, sink)
+    new_hosted_gui("PumpGpuiVst3EditorView", params, status, sink, resize)
 }
 
 fn new_hosted_gui(
@@ -880,6 +959,7 @@ fn new_hosted_gui(
     params: Arc<PumpParams>,
     status: Arc<crate::GuiStatus>,
     sink: Arc<dyn HostParamEditSink>,
+    resize: ResizeRequester,
 ) -> toybox::gpui_gui::GpuiHostedGui {
     let state = Rc::new(RefCell::new(PumpEditorState::new(
         Arc::clone(&params),
@@ -904,12 +984,14 @@ fn new_hosted_gui(
             let teardown_pending = Rc::clone(&factory_teardown_pending);
             let teardown_in_progress = Rc::clone(&factory_teardown_in_progress);
             let pointer_cancel_pending = Rc::clone(&factory_pointer_cancel_pending);
+            let resize = Rc::clone(&resize);
             cx.new(move |cx| {
                 PumpEditor::new(
                     state,
                     teardown_pending,
                     teardown_in_progress,
                     pointer_cancel_pending,
+                    resize,
                     cx,
                 )
             })
@@ -921,9 +1003,8 @@ fn new_hosted_gui(
     .with_size_contract(
         (MIN_WINDOW_WIDTH, MIN_WINDOW_HEIGHT),
         (WINDOW_WIDTH, WINDOW_HEIGHT),
-        (MAX_WINDOW_WIDTH, MAX_WINDOW_HEIGHT),
+        (super::MAX_EXPANDED_WIDTH, MAX_WINDOW_HEIGHT),
     )
-    .with_fixed_aspect_ratio()
     .with_pointer_cancel_callback(move || {
         pointer_cancel_pending.set(true);
         if let Ok(mut state) = pointer_cancel_state.try_borrow_mut() {
@@ -1040,6 +1121,7 @@ pub fn new_screenshot_gui_with_params() -> (
         Arc::clone(&params),
         Arc::clone(&status),
         clap_edit_sink(Arc::new(PumpAutomationQueue::default()), None),
+        Rc::new(|_, _| ResizeDisposition::ResizeLocally),
     );
     (gui, params, status)
 }
@@ -1101,6 +1183,7 @@ struct PumpEditor {
     teardown_in_progress: Rc<Cell<bool>>,
     pointer_cancel_pending: Rc<Cell<bool>>,
     curve_bounds: Rc<RefCell<Option<Bounds<Pixels>>>>,
+    frequency_bounds: Rc<RefCell<Option<Bounds<Pixels>>>>,
     editor_focus_handle: FocusHandle,
     focus_out_subscription: Option<gpui::Subscription>,
     numeric_inputs: Vec<Entity<NumericInput>>,
@@ -1123,11 +1206,21 @@ struct PumpEditor {
     active_mix_slider: Option<(usize, f32, f32)>,
     active_compressor_drag: Option<(usize, f32, f32)>,
     compressor_panel_open: bool,
+    filter_panel_open: bool,
+    main_panel_width: Option<u32>,
+    resize: ResizeRequester,
+    resize_task: Option<gpui::Task<()>>,
     compressor_hover: Option<usize>,
     capture_hovered: bool,
     last_pointer: Option<Point<Pixels>>,
     button_focus_handles: HashMap<&'static str, FocusHandle>,
     button_activation_keys: HashSet<String>,
+}
+
+#[derive(Clone, Copy)]
+enum EditorPanel {
+    Compressor,
+    Filter,
 }
 
 struct CrossoverDrag {
@@ -1155,6 +1248,7 @@ impl PumpEditor {
         teardown_pending: Rc<Cell<bool>>,
         teardown_in_progress: Rc<Cell<bool>>,
         pointer_cancel_pending: Rc<Cell<bool>>,
+        resize: ResizeRequester,
         cx: &mut Context<Self>,
     ) -> Self {
         let targets = [
@@ -1263,6 +1357,7 @@ impl PumpEditor {
             "sidechain-waveform",
             "bypass",
             "compressor-panel",
+            "filter-panel",
             "compressor-capture",
         ]
         .into_iter()
@@ -1275,6 +1370,7 @@ impl PumpEditor {
             teardown_in_progress,
             pointer_cancel_pending,
             curve_bounds: Rc::new(RefCell::new(None)),
+            frequency_bounds: Rc::new(RefCell::new(None)),
             editor_focus_handle: cx.focus_handle(),
             focus_out_subscription: None,
             numeric_inputs,
@@ -1297,6 +1393,10 @@ impl PumpEditor {
             active_mix_slider: None,
             active_compressor_drag: None,
             compressor_panel_open: false,
+            filter_panel_open: false,
+            main_panel_width: None,
+            resize,
+            resize_task: None,
             compressor_hover: None,
             capture_hovered: false,
             last_pointer: None,
@@ -1508,16 +1608,82 @@ impl PumpEditor {
         ))
     }
 
+    fn panel_widths(&self) -> (u32, u32) {
+        (
+            if self.compressor_panel_open {
+                COMPRESSOR_PANEL_WIDTH
+            } else {
+                0
+            },
+            if self.filter_panel_open {
+                FILTER_PANEL_WIDTH
+            } else {
+                0
+            },
+        )
+    }
+
+    fn toggle_panel(&mut self, panel: EditorPanel, window: &mut Window, cx: &mut Context<Self>) {
+        self.dismiss_timing_dropdown(cx);
+        let viewport = window.viewport_size();
+        let width = f32::from(viewport.width).round() as u32;
+        let height = f32::from(viewport.height).round() as u32;
+        let (left, right) = self.panel_widths();
+        let extra = left + right;
+        let base = self
+            .main_panel_width
+            .map_or(width, |base| {
+                if width >= base + extra {
+                    width - extra
+                } else {
+                    base
+                }
+            })
+            .clamp(MIN_WINDOW_WIDTH, MAX_WINDOW_WIDTH);
+        match panel {
+            EditorPanel::Compressor => self.compressor_panel_open = !self.compressor_panel_open,
+            EditorPanel::Filter => {
+                self.filter_panel_open = !self.filter_panel_open;
+                self.clear_curve_hover(cx);
+            }
+        }
+        let (left, right) = self.panel_widths();
+        let target_width = base + left + right;
+        self.main_panel_width = (left + right > 0).then_some(base);
+        self.resize_task = None;
+        if target_width != width {
+            #[cfg(target_os = "windows")]
+            let scale = window.scale_factor();
+            #[cfg(not(target_os = "windows"))]
+            let scale = 1.0;
+            let resize = Rc::clone(&self.resize);
+            // Hosts can synchronously call onSize from resizeView. Make the
+            // request after GPUI releases the current window and entity update.
+            self.resize_task = Some(cx.spawn_in(window, async move |view, cx| {
+                let disposition = resize(
+                    (target_width as f32 * scale).round() as u32,
+                    (height as f32 * scale).round() as u32,
+                );
+                if matches!(disposition, ResizeDisposition::ResizeLocally) {
+                    let _ = view.update_in(cx, |_, window, _| {
+                        window.resize(size(px(target_width as f32), px(height as f32)));
+                    });
+                }
+            }));
+        }
+        cx.notify();
+    }
+
+    fn frequency_contains(&self, position: Point<Pixels>) -> bool {
+        self.filter_panel_open
+            && self
+                .frequency_bounds
+                .borrow()
+                .is_some_and(|bounds| bounds.contains(&position))
+    }
+
     fn filter_plot_geometry(&self) -> Option<(f32, f32, f32, f32)> {
-        let bounds = self.curve_bounds.borrow().as_ref().copied()?;
-        let left = f32::from(bounds.left()) + CURVE_GUTTER;
-        let top = f32::from(bounds.top());
-        let width =
-            (f32::from(bounds.size.width) - CURVE_GUTTER - CURVE_METER_GAP - CURVE_METER_WIDTH)
-                .max(1.0);
-        let height =
-            (f32::from(bounds.size.height) - CURVE_OFFSET_BAR_HEIGHT - CURVE_OFFSET_INSET).max(1.0);
-        Some((left, top, width, height))
+        self.frequency_bounds.borrow().map(frequency_plot_geometry)
     }
 
     fn filter_frequency_x(&self, frequency_hz: f32) -> Option<f32> {
@@ -1597,7 +1763,7 @@ impl PumpEditor {
     fn hit_filter_handle(&self, position: Point<Pixels>) -> Option<FilterHandle> {
         if self.state.borrow().params().effects()[0] >= 0.5
             || !self.state.borrow().filter_enabled()
-            || !self.curve_plot_contains(position)
+            || !self.frequency_contains(position)
         {
             return None;
         }
@@ -1616,7 +1782,9 @@ impl PumpEditor {
 
     fn hit_crossover(&self, position: Point<Pixels>) -> Option<CrossoverDrag> {
         let effects = self.state.borrow().params().effects();
-        if effects[0] < 0.5 && self.state.borrow().filter_enabled() {
+        if !self.frequency_contains(position)
+            || (effects[0] < 0.5 && self.state.borrow().filter_enabled())
+        {
             return None;
         }
         let (left, top, width, height) = self.filter_plot_geometry()?;
@@ -1626,8 +1794,6 @@ impl PumpEditor {
         if (position.x - marker).abs() > px(CROSSOVER_HIT_RADIUS)
             || position.y < plot.top()
             || position.y > plot.bottom()
-            || self.node_at(position).is_some()
-            || self.seam_at(position).is_some()
         {
             return None;
         }
@@ -1769,28 +1935,14 @@ impl PumpEditor {
                 cx,
             );
         }
-        if !event.modifiers.modified() && self.hit_crossover(event.position).is_some() {
-            if !self.crossover_hovered {
-                self.clear_curve_hover(cx);
-                self.crossover_hovered = true;
-                cx.notify();
-            }
-            return;
-        }
         if std::mem::take(&mut self.crossover_hovered) {
             cx.notify();
         }
-        let filter_handle = self.hit_filter_handle(event.position);
-        if filter_handle != self.state.borrow().hover_filter_handle() {
+        if self.state.borrow().hover_filter_handle().is_some() {
             self.dispatch(
-                EditorMessage::Curve(CurvePreviewMessage::HoverFilterHandle {
-                    handle: filter_handle,
-                }),
+                EditorMessage::Curve(CurvePreviewMessage::HoverFilterHandle { handle: None }),
                 cx,
             );
-        }
-        if filter_handle.is_some() {
-            return;
         }
         if self.seam_at(event.position).is_some() {
             self.clear_curve_hover(cx);
@@ -1830,6 +1982,32 @@ impl PumpEditor {
             }),
             cx,
         );
+    }
+
+    fn dispatch_frequency_hover(&mut self, event: &MouseMoveEvent, cx: &mut Context<Self>) {
+        let had_curve_hover = {
+            let state = self.state.borrow();
+            state.hover_node().is_some()
+                || state.preview_node().is_some()
+                || state.hover_segment().is_some()
+        };
+        if had_curve_hover {
+            self.clear_curve_hover(cx);
+        }
+        self.last_pointer = None;
+        let highlighted =
+            !event.modifiers.modified() && self.hit_crossover(event.position).is_some();
+        if self.crossover_hovered != highlighted {
+            self.crossover_hovered = highlighted;
+            cx.notify();
+        }
+        let handle = self.hit_filter_handle(event.position);
+        if handle != self.state.borrow().hover_filter_handle() {
+            self.dispatch(
+                EditorMessage::Curve(CurvePreviewMessage::HoverFilterHandle { handle }),
+                cx,
+            );
+        }
     }
 
     fn clear_curve_hover(&mut self, cx: &mut Context<Self>) {
@@ -2049,6 +2227,36 @@ impl PumpEditor {
         10.0 / (width - 1.0).max(1.0)
     }
 
+    fn frequency_mouse_down(
+        &mut self,
+        event: &MouseDownEvent,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        self.dismiss_timing_dropdown(cx);
+        window.focus(&self.editor_focus_handle, cx);
+        if let Some(handle) = self.hit_filter_handle(event.position) {
+            if let Some((frequency_hz, q)) = self.filter_values_at_pointer(event.position) {
+                self.curve_active_button = Some(MouseButton::Left);
+                self.filter_drag_handle = Some(handle);
+                self.dispatch(
+                    EditorMessage::Curve(CurvePreviewMessage::PressFilterHandle {
+                        handle,
+                        frequency_hz,
+                        q,
+                    }),
+                    cx,
+                );
+            }
+        } else if !event.modifiers.modified() {
+            if let Some(drag) = self.hit_crossover(event.position) {
+                self.curve_active_button = Some(MouseButton::Left);
+                self.crossover_drag = Some(drag);
+                cx.notify();
+            }
+        }
+    }
+
     fn curve_mouse_down(
         &mut self,
         event: &MouseDownEvent,
@@ -2080,37 +2288,6 @@ impl PumpEditor {
         let shift = event.modifiers.shift;
         let option = event.modifiers.alt;
         let command = event.modifiers.platform || event.modifiers.control;
-
-        // Filter handles sit above the envelope. Admit them before seam,
-        // node, and segment hit tests so an overlay drag cannot edit the
-        // underlying curve accidentally.
-        if event.button == MouseButton::Left {
-            if let Some(handle) = self.hit_filter_handle(event.position) {
-                let (frequency_hz, q) = self
-                    .filter_values_at_pointer(event.position)
-                    .unwrap_or((MIN_FILTER_FREQ_HZ, MIN_FILTER_Q));
-                self.curve_active_button = Some(MouseButton::Left);
-                self.filter_drag_handle = Some(handle);
-                self.dispatch(
-                    EditorMessage::Curve(CurvePreviewMessage::PressFilterHandle {
-                        handle,
-                        frequency_hz,
-                        q,
-                    }),
-                    cx,
-                );
-                return;
-            }
-            if !event.modifiers.modified() {
-                if let Some(drag) = self.hit_crossover(event.position) {
-                    self.clear_curve_hover(cx);
-                    self.curve_active_button = Some(MouseButton::Left);
-                    self.crossover_drag = Some(drag);
-                    cx.notify();
-                    return;
-                }
-            }
-        }
 
         // Secondary-button input is always freehand paint inside the plot.
         // Keep it ahead of node/segment admission so a right drag over an
@@ -2322,13 +2499,6 @@ impl PumpEditor {
             self.update_crossover_drag(event.position.x, cx);
             return;
         }
-        let Some(display_point) = self.normalized_curve_point(event.position) else {
-            return;
-        };
-        let point = self
-            .raw_curve_node(event.position)
-            .unwrap_or(CurveNode { x: 0.0, y: 0.0 });
-        self.last_pointer = Some(event.position);
         if let Some(handle) = self.filter_drag_handle {
             if let Some((frequency_hz, q)) = self.filter_values_at_pointer(event.position) {
                 self.dispatch(
@@ -2342,6 +2512,13 @@ impl PumpEditor {
             }
             return;
         }
+        let Some(display_point) = self.normalized_curve_point(event.position) else {
+            return;
+        };
+        let point = self
+            .raw_curve_node(event.position)
+            .unwrap_or(CurveNode { x: 0.0, y: 0.0 });
+        self.last_pointer = Some(event.position);
         if let Some((origin, right_edge)) = self.pending_seam {
             if f32::from(event.position.y - origin.y).abs() < 3.0 {
                 return;
@@ -2662,7 +2839,9 @@ impl PumpEditor {
             self.clear_curve_hover(cx);
             return false;
         }
-        if self
+        if self.frequency_contains(event.position) {
+            self.dispatch_frequency_hover(event, cx);
+        } else if self
             .curve_bounds
             .borrow()
             .as_ref()
@@ -3165,6 +3344,7 @@ impl PumpEditor {
             "waveform-mode",
             "sidechain-waveform",
             "compressor-panel",
+            "filter-panel",
             "compressor-capture",
             "bypass",
         ]
@@ -3176,7 +3356,12 @@ impl PumpEditor {
         })
     }
 
-    fn activate_focused_button(&mut self, id: &'static str, cx: &mut Context<Self>) {
+    fn activate_focused_button(
+        &mut self,
+        id: &'static str,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
         match id {
             "timing-mode" => {
                 self.dismiss_timing_dropdown(cx);
@@ -3230,10 +3415,8 @@ impl PumpEditor {
                 self.dismiss_timing_dropdown(cx);
                 self.dispatch(EditorMessage::ToggleSidechainWaveform, cx);
             }
-            "compressor-panel" => {
-                self.compressor_panel_open = !self.compressor_panel_open;
-                cx.notify();
-            }
+            "compressor-panel" => self.toggle_panel(EditorPanel::Compressor, window, cx),
+            "filter-panel" => self.toggle_panel(EditorPanel::Filter, window, cx),
             "compressor-capture" => {
                 let message = if self.state.borrow().capture_pending() {
                     EditorMessage::CancelCompressorCapture
@@ -3302,7 +3485,7 @@ impl PumpEditor {
                     cx.stop_propagation();
                     return;
                 }
-                self.activate_focused_button(button, cx);
+                self.activate_focused_button(button, window, cx);
                 window.prevent_default();
                 cx.stop_propagation();
                 return;
@@ -3625,7 +3808,6 @@ fn draw_curve(
     bounds: Bounds<Pixels>,
     state: &PumpEditorState,
     last_pointer: Option<Point<Pixels>>,
-    crossover_highlighted: bool,
     window: &mut Window,
     cx: &mut App,
 ) {
@@ -3791,9 +3973,6 @@ fn draw_curve(
         window.with_content_mask(mask, |window| {
             window.paint_path(area, solid(theme.accent_mint.with_alpha(17)));
         });
-    }
-    if state.params().effects()[0] >= 0.5 || !state.filter_enabled() {
-        draw_crossover_preview(curve_bounds, state, crossover_highlighted, window, cx);
     }
     let curve_color = if compressor_enabled {
         theme.text_muted.with_alpha(130)
@@ -4014,9 +4193,6 @@ fn draw_curve(
             window.paint_path(path, solid(stroke_color));
         }
     }
-    if state.params().effects()[0] < 0.5 {
-        draw_filter_overlay(bounds, state, window, cx);
-    }
     if let Some((start, current)) = state.active_curve_marquee() {
         let start = curve_point_pixels(left, top, width, height, phase, start);
         let current = curve_point_pixels(left, top, width, height, phase, current);
@@ -4212,6 +4388,15 @@ fn draw_curve(
     let _ = cx;
 }
 
+fn frequency_plot_geometry(bounds: Bounds<Pixels>) -> (f32, f32, f32, f32) {
+    (
+        f32::from(bounds.left()) + 8.0,
+        f32::from(bounds.top()) + 4.0,
+        (f32::from(bounds.size.width) - 16.0).max(1.0),
+        (f32::from(bounds.size.height) - 8.0).max(1.0),
+    )
+}
+
 fn crossover_plot(left: f32, top: f32, width: f32, height: f32) -> Bounds<Pixels> {
     Bounds::new(
         point(px(left), px(top + 12.0)),
@@ -4238,10 +4423,7 @@ fn draw_crossover_preview(
     window: &mut Window,
     cx: &mut App,
 ) {
-    let left = f32::from(bounds.left());
-    let top = f32::from(bounds.top());
-    let width = f32::from(bounds.size.width);
-    let height = f32::from(bounds.size.height);
+    let (left, top, width, height) = frequency_plot_geometry(bounds);
     let theme = pump_theme();
     let controls = state.params().effects();
     let plot = crossover_plot(left, top, width, height);
@@ -4347,15 +4529,7 @@ fn draw_filter_overlay(
     window: &mut Window,
     cx: &mut App,
 ) {
-    if !state.filter_enabled() {
-        return;
-    }
-    let left = f32::from(bounds.left()) + CURVE_GUTTER;
-    let top = f32::from(bounds.top());
-    let width = (f32::from(bounds.size.width) - CURVE_GUTTER - CURVE_METER_GAP - CURVE_METER_WIDTH)
-        .max(1.0);
-    let height =
-        (f32::from(bounds.size.height) - CURVE_OFFSET_BAR_HEIGHT - CURVE_OFFSET_INSET).max(1.0);
+    let (left, top, width, height) = frequency_plot_geometry(bounds);
     let plot_width = (width - 1.0).max(1.0);
     let plot_height = (height - 1.0).max(1.0);
     let params = state.params();
@@ -5272,7 +5446,7 @@ impl PumpEditor {
         }));
         div()
             .id("band-mix-controls")
-            .w(px(176.))
+            .w_full()
             .flex_shrink_0()
             .h(px(DECK_HEIGHT))
             .flex()
@@ -5315,7 +5489,7 @@ impl PumpEditor {
                 }));
                 div()
                     .h(px(24.))
-                    .w(px(154.))
+                    .w_full()
                     .flex()
                     .items_center()
                     .gap(px(4.))
@@ -5324,48 +5498,212 @@ impl PumpEditor {
             }))
     }
 
-    fn compressor_deck(&self, cx: &Context<Self>) -> gpui::Div {
-        let values = self.state.borrow().params().compressor();
-        let group = |heading, knobs: &[usize], switches: &[usize]| {
-            div()
-                .min_w(px(0.0))
-                .h_full()
-                .flex()
-                .flex_col()
-                .gap(px(3.0))
-                .child(
-                    div()
-                        .h(px(14.0))
-                        .border_b_1()
-                        .border_color(solid(pump_theme().border))
-                        .child(group_heading(heading)),
-                )
-                .child(
-                    div().flex().h(px(47.0)).children(
-                        knobs
-                            .iter()
-                            .map(|&index| self.compressor_control(index, values[index], cx)),
-                    ),
-                )
-                .child(
-                    div().flex().gap(px(4.0)).children(
-                        switches
-                            .iter()
-                            .map(|&index| self.compressor_control(index, values[index], cx)),
-                    ),
-                )
+    fn panel_shell(&self, panel: EditorPanel, cx: &Context<Self>) -> gpui::Stateful<gpui::Div> {
+        let (id, title, close_id, width) = match panel {
+            EditorPanel::Compressor => (
+                "compressor-drawer",
+                "COMPRESSOR",
+                "close-compressor",
+                COMPRESSOR_PANEL_WIDTH,
+            ),
+            EditorPanel::Filter => (
+                "filter-drawer",
+                "FILTER",
+                "close-filter",
+                FILTER_PANEL_WIDTH,
+            ),
         };
+        let theme = pump_theme();
         div()
-            .w_full()
-            .h(px(84.0))
+            .id(id)
+            .w(px(width as f32))
+            .h_full()
+            .flex_shrink_0()
             .flex()
-            .gap(px(12.0))
+            .flex_col()
+            .gap(px(8.))
+            .p(px(10.))
+            .border_1()
+            .border_color(solid(theme.border))
+            .bg(solid(theme.clear))
             .child(
-                group("COMPRESSOR", &[1, 4, 2, 3, 5, 6, 7], &[0, 17, 8, 18])
-                    .w(relative(0.6))
-                    .flex_shrink_0(),
+                div()
+                    .flex()
+                    .items_center()
+                    .justify_between()
+                    .h(px(20.))
+                    .flex_shrink_0()
+                    .child(group_heading(title))
+                    .child(
+                        button(close_id, "CLOSE".into(), false, 46., None)
+                            .h(px(18.))
+                            .on_click(cx.listener(move |view, _, window, cx| {
+                                window.focus(
+                                    view.button_focus_handle(match panel {
+                                        EditorPanel::Compressor => "compressor-panel",
+                                        EditorPanel::Filter => "filter-panel",
+                                    }),
+                                    cx,
+                                );
+                                view.toggle_panel(panel, window, cx);
+                            })),
+                    ),
             )
-            .child(group("SIDECHAIN", &[10, 11, 14, 15], &[9, 16, 12, 13]).flex_1())
+    }
+
+    fn filter_panel(&self, cx: &Context<Self>) -> gpui::Stateful<gpui::Div> {
+        let theme = pump_theme();
+        let bounds_ref = Rc::clone(&self.frequency_bounds);
+        let state = Rc::clone(&self.state);
+        let highlighted = self.crossover_hovered || self.crossover_drag.is_some();
+        let handle_hovered = self.state.borrow().hover_filter_handle().is_some()
+            || self.filter_drag_handle.is_some();
+        let plot = canvas(
+            move |bounds, _, _| {
+                *bounds_ref.borrow_mut() = Some(bounds);
+                #[cfg(feature = "screenshot-test")]
+                record_screenshot_bounds("frequency-plot", bounds);
+            },
+            move |bounds, _, window, cx| {
+                window.paint_quad(fill(bounds, solid(theme.display)));
+                let (left, top, width, height) = frequency_plot_geometry(bounds);
+                let grid = crossover_plot(left, top, width, height);
+                for fraction in [0.0, 1.0 / 3.0, 2.0 / 3.0, 1.0] {
+                    let x = grid.left() + grid.size.width * fraction;
+                    window.paint_quad(fill(
+                        Bounds::new(point(x, grid.top()), size(px(1.), grid.size.height)),
+                        solid(theme.grid_soft),
+                    ));
+                }
+                for fraction in [0.0, 0.5, 1.0] {
+                    let y = grid.top() + grid.size.height * fraction;
+                    window.paint_quad(fill(
+                        Bounds::new(point(grid.left(), y), size(grid.size.width, px(1.))),
+                        solid(theme.grid_soft),
+                    ));
+                }
+                let state = state.borrow();
+                if state.params().effects()[0] < 0.5 && state.filter_enabled() {
+                    draw_filter_overlay(bounds, &state, window, cx);
+                } else {
+                    draw_crossover_preview(bounds, &state, highlighted, window, cx);
+                }
+            },
+        )
+        .size_full();
+        self.panel_shell(EditorPanel::Filter, cx)
+            .child(
+                div()
+                    .id("frequency-plot")
+                    .flex_1()
+                    .min_h(px(152.))
+                    .border_1()
+                    .border_color(solid(theme.border))
+                    .when(highlighted, |el| el.cursor(CursorStyle::ResizeLeftRight))
+                    .when(handle_hovered, |el| el.cursor(CursorStyle::ClosedHand))
+                    .on_mouse_down(MouseButton::Left, cx.listener(Self::frequency_mouse_down))
+                    .child(plot),
+            )
+            .child(self.band_mix_group(cx))
+    }
+
+    fn compressor_panel(&self, cx: &Context<Self>) -> gpui::Stateful<gpui::Div> {
+        let values = self.state.borrow().params().compressor();
+        let controls = |indices: &[usize]| {
+            indices
+                .iter()
+                .map(|&index| self.compressor_control(index, values[index], cx))
+                .collect::<Vec<_>>()
+        };
+        let reduction = self.state.borrow().status().gain_reduction_db();
+        let theme = pump_theme();
+        let meter = canvas(
+            |_, _, _| {},
+            move |bounds, _, window, _| {
+                let colors = pump_meter_colors();
+                let fraction = crate::gui_status::gain_reduction_meter_fraction(reduction);
+                window.paint_quad(fill(bounds, solid(colors.track)));
+                if fraction > 0.0 {
+                    window.paint_quad(fill(
+                        Bounds::new(
+                            bounds.origin,
+                            size(bounds.size.width, bounds.size.height * fraction),
+                        ),
+                        solid(if fraction > 0.75 {
+                            colors.hot
+                        } else {
+                            colors.nominal
+                        }),
+                    ));
+                }
+            },
+        )
+        .w(px(14.))
+        .h(px(78.));
+        self.panel_shell(EditorPanel::Compressor, cx)
+            .child(div().flex().gap(px(4.)).children(controls(&[0, 17, 8, 18])))
+            .child(
+                div()
+                    .flex()
+                    .items_center()
+                    .gap(px(8.))
+                    .h(px(108.))
+                    .flex_shrink_0()
+                    .border_1()
+                    .border_color(solid(theme.border))
+                    .bg(solid(theme.display))
+                    .child(
+                        self.compressor_control(1, values[1], cx)
+                            .flex_none()
+                            .w(px(58.)),
+                    )
+                    .child(
+                        div()
+                            .w(px(52.))
+                            .flex_shrink_0()
+                            .flex()
+                            .flex_col()
+                            .items_center()
+                            .gap(px(2.))
+                            .child(group_heading("GR"))
+                            .child(meter)
+                            .child(div().text_size(px(9.)).child(format!("{reduction:.1} dB"))),
+                    )
+                    .child(
+                        div()
+                            .flex()
+                            .flex_1()
+                            .h(px(48.))
+                            .children(controls(&[4, 2, 3])),
+                    ),
+            )
+            .child(
+                div()
+                    .h(px(46.))
+                    .flex_shrink_0()
+                    .flex()
+                    .children(controls(&[5, 6, 7])),
+            )
+            .child(
+                div()
+                    .h(px(18.))
+                    .border_b_1()
+                    .border_color(solid(theme.border))
+                    .child(group_heading("SIDECHAIN")),
+            )
+            .child(
+                div()
+                    .flex()
+                    .gap(px(4.))
+                    .children(controls(&[9, 16, 12, 13])),
+            )
+            .child(
+                div()
+                    .h(px(46.))
+                    .flex_shrink_0()
+                    .flex()
+                    .children(controls(&[10, 11, 14, 15])),
+            )
     }
 
     fn compressor_control(
@@ -5393,10 +5731,25 @@ impl PumpEditor {
             let theme = pump_theme();
             let face = canvas(
                 |_, _, _| {},
-                move |bounds, _, window, _| draw_knob_face(bounds, normalized, window),
+                move |bounds, _, window, _| {
+                    if index == 1 {
+                        let x = bounds.left() + bounds.size.width * 0.5;
+                        let track = Bounds::new(
+                            point(x - px(2.), bounds.top()),
+                            size(px(4.), bounds.size.height),
+                        );
+                        window.paint_quad(fill(track, solid(theme.grid_soft)));
+                        let y = bounds.top() + bounds.size.height * (1.0 - normalized);
+                        let marker =
+                            Bounds::new(point(x - px(8.), y - px(2.)), size(px(16.), px(4.)));
+                        window.paint_quad(fill(marker, solid(theme.accent_copper)));
+                    } else {
+                        draw_knob_face(bounds, normalized, window);
+                    }
+                },
             )
-            .w(px(26.0))
-            .h(px(26.0));
+            .w(px(26.))
+            .h(px(if index == 1 { 74. } else { 26. }));
             let knob = div()
                 .id(id)
                 .track_focus(&focus)
@@ -5689,22 +6042,12 @@ impl Render for PumpEditor {
         let draw_state = Rc::clone(&self.state);
         let editor_entity = cx.entity().downgrade();
         let last_pointer = self.last_pointer;
-        let crossover_highlighted = self.crossover_drag.is_some()
-            || (self.crossover_hovered
-                && last_pointer.is_some_and(|point| self.hit_crossover(point).is_some()));
         let curve = canvas(
             move |bounds, _, _| {
                 *curve_bounds.borrow_mut() = Some(bounds);
             },
             move |bounds, _, window, cx| {
-                draw_curve(
-                    bounds,
-                    &draw_state.borrow(),
-                    last_pointer,
-                    crossover_highlighted,
-                    window,
-                    cx,
-                );
+                draw_curve(bounds, &draw_state.borrow(), last_pointer, window, cx);
                 let down_editor_entity = editor_entity.clone();
                 window.on_mouse_event(move |_: &MouseDownEvent, phase, _window, cx| {
                     if phase == DispatchPhase::Capture {
@@ -5758,9 +6101,6 @@ impl Render for PumpEditor {
             .min_h(px(140.))
             .border_1()
             .border_color(solid(theme.border))
-            .when(crossover_highlighted, |element| {
-                element.cursor(CursorStyle::ResizeLeftRight)
-            })
             .on_mouse_down(MouseButton::Left, cx.listener(Self::curve_mouse_down))
             .on_mouse_down(MouseButton::Right, cx.listener(Self::curve_mouse_down))
             .child(curve);
@@ -5799,7 +6139,6 @@ impl Render for PumpEditor {
             .flex()
             .gap(px(16.))
             .child(self.shape_group(cx))
-            .child(self.band_mix_group(cx))
             .child(
                 div()
                     .flex_1()
@@ -5815,11 +6154,6 @@ impl Render for PumpEditor {
                     )
                     .child(div().flex().items_center().children(level_controls)),
             );
-        let deck = if self.compressor_panel_open {
-            self.compressor_deck(cx)
-        } else {
-            standard_deck
-        };
         let mut timing_button = button(
             "timing-mode",
             if timing_free {
@@ -6145,9 +6479,9 @@ impl Render for PumpEditor {
             Some(self.button_focus_handle("sidechain-waveform")),
         )
         .h(px(FOOTER_HEIGHT))
-        .on_click(cx.listener(|view, event: &gpui::ClickEvent, _, cx| {
+        .on_click(cx.listener(|view, event: &gpui::ClickEvent, window, cx| {
             if !event.is_keyboard() {
-                view.activate_focused_button("sidechain-waveform", cx);
+                view.activate_focused_button("sidechain-waveform", window, cx);
             }
         }));
         if sidechain_visible {
@@ -6210,20 +6544,43 @@ impl Render for PumpEditor {
         bypass_button =
             bypass_button.child(div().child(if bypassed { "BYPASSED" } else { "ACTIVE" }));
         bypass_button = bypass_button.on_click(cx.listener(Self::toggle_bypass));
-        let compressor_panel = button(
+        let panel_button = |id, label: &str, active, panel| {
+            button(
+                id,
+                label.into(),
+                active,
+                65.,
+                Some(self.button_focus_handle(id)),
+            )
+            .h(px(FOOTER_HEIGHT))
+            .on_click(cx.listener(
+                move |view, event: &gpui::ClickEvent, window, cx| {
+                    if !event.is_keyboard() {
+                        view.toggle_panel(panel, window, cx);
+                    }
+                },
+            ))
+        };
+        let compressor_panel = panel_button(
             "compressor-panel",
-            "COMP".into(),
+            if self.compressor_panel_open {
+                "› COMP"
+            } else {
+                "‹ COMP"
+            },
             self.compressor_panel_open || params.compressor()[0] >= 0.5,
-            55.0,
-            Some(self.button_focus_handle("compressor-panel")),
-        )
-        .h(px(FOOTER_HEIGHT))
-        .on_click(cx.listener(|view, event: &gpui::ClickEvent, _, cx| {
-            if !event.is_keyboard() {
-                view.compressor_panel_open = !view.compressor_panel_open;
-                cx.notify();
-            }
-        }));
+            EditorPanel::Compressor,
+        );
+        let filter_panel = panel_button(
+            "filter-panel",
+            if self.filter_panel_open {
+                "FILTER ‹"
+            } else {
+                "FILTER ›"
+            },
+            self.filter_panel_open,
+            EditorPanel::Filter,
+        );
         let capture_pending = state.capture_pending();
         let compressor_capture = button(
             "compressor-capture",
@@ -6310,7 +6667,13 @@ impl Render for PumpEditor {
                             .child(capture_message),
                     ),
             )
-            .child(bypass_button.flex_shrink_0());
+            .child(
+                div()
+                    .flex()
+                    .gap(px(4.))
+                    .child(filter_panel)
+                    .child(bypass_button),
+            );
         let hotkey_help = if state.hotkey_help_open() {
             const ROWS: [(&str, &str); 10] = [
                 ("Cmd/Ctrl + Z / u", "Undo"),
@@ -6381,11 +6744,11 @@ impl Render for PumpEditor {
         } else {
             div().id("hotkey-help-overlay").hidden()
         };
-        div()
+        let main = div()
             .id("pump-editor")
-            .track_focus(&self.editor_focus_handle)
             .relative()
-            .w_full()
+            .flex_1()
+            .min_w(px(0.))
             .h_full()
             .flex()
             .flex_col()
@@ -6399,16 +6762,56 @@ impl Render for PumpEditor {
             .font(font("Ioskeley Mono"))
             .text_size(px(PUMP_TYPOGRAPHY.body.0))
             .line_height(px(PUMP_TYPOGRAPHY.body.1))
-            .on_key_down(cx.listener(Self::handle_key_down))
-            .on_key_up(cx.listener(Self::handle_key_up))
-            .on_modifiers_changed(cx.listener(Self::handle_modifiers))
             .child(chassis_artwork())
             .child(header)
             .child(curve_area)
             .child(slots)
-            .child(deck)
+            .child(standard_deck)
             .child(footer)
             .child(version_label)
-            .child(hotkey_help)
+            .child(hotkey_help);
+
+        let (left, right) = self.panel_widths();
+        let width = f32::from(window.viewport_size().width).round() as u32;
+        let available = width.saturating_sub(self.main_panel_width.unwrap_or(width));
+        let dock_left = left > 0 && available >= left;
+        let dock_right = right > 0 && available >= right + if dock_left { left } else { 0 };
+        let compressor = dock_left.then(|| self.compressor_panel(cx));
+        let filter = dock_right.then(|| self.filter_panel(cx));
+        div()
+            .id("pump-window")
+            .track_focus(&self.editor_focus_handle)
+            .relative()
+            .size_full()
+            .flex()
+            .text_color(solid(theme.text_primary))
+            .font(font("Ioskeley Mono"))
+            .text_size(px(PUMP_TYPOGRAPHY.body.0))
+            .line_height(px(PUMP_TYPOGRAPHY.body.1))
+            .on_key_down(cx.listener(Self::handle_key_down))
+            .on_key_up(cx.listener(Self::handle_key_up))
+            .on_modifiers_changed(cx.listener(Self::handle_modifiers))
+            .children(compressor)
+            .child(main)
+            .children(filter)
+            // Keep the controls reachable if the host holds the current size.
+            .when(left > 0 && !dock_left, |el| {
+                el.child(
+                    self.compressor_panel(cx)
+                        .absolute()
+                        .left(px(0.))
+                        .top(px(0.))
+                        .occlude(),
+                )
+            })
+            .when(right > 0 && !dock_right, |el| {
+                el.child(
+                    self.filter_panel(cx)
+                        .absolute()
+                        .right(px(0.))
+                        .top(px(0.))
+                        .occlude(),
+                )
+            })
     }
 }

@@ -12,9 +12,9 @@ use toybox::vst3::prelude::Steinberg::*;
 use toybox::vst3::prelude::*;
 
 use crate::dsp::PumpEngine;
-use crate::gui::{
-    preferred_window_size, MAX_WINDOW_HEIGHT, MAX_WINDOW_WIDTH, MIN_WINDOW_HEIGHT, MIN_WINDOW_WIDTH,
-};
+#[cfg(all(test, any(target_os = "macos", target_os = "windows")))]
+use crate::gui::MAX_EXPANDED_WIDTH;
+use crate::gui::{preferred_window_size, MAX_WINDOW_HEIGHT, MIN_WINDOW_HEIGHT, MIN_WINDOW_WIDTH};
 #[cfg(test)]
 use crate::params::PARAM_MIX_NUM;
 use crate::params::{
@@ -70,7 +70,7 @@ mod factory;
 mod gui_adapter;
 
 use controller::PumpVst3Controller;
-#[cfg(any(target_os = "macos", target_os = "windows"))]
+#[cfg(all(test, any(target_os = "macos", target_os = "windows")))]
 use gui_adapter::PumpVst3GuiAdapter;
 use processor::PumpVst3Processor;
 
