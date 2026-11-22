@@ -385,7 +385,7 @@ fn fit_bezier(points: &[f32], boundary: FitBoundary) -> Vec<CompressorAnchor> {
     loop {
         let mut greatest = (BEZIER_FIT_ERROR, 0, 0);
         for segment in 0..anchors.len() - 1 {
-            let (tension, cubic) = fit_bezier_segment(points, &anchors, segment, boundary);
+            let (tension, cubic) = fit_bezier_segment(points, &anchors, segment, boundary, false);
             let start = anchors[segment].sample;
             let end = anchors[segment + 1].sample;
             anchors[segment].tension = tension;
@@ -415,6 +415,7 @@ fn fit_bezier_segment(
     anchors: &[CompressorAnchor],
     segment: usize,
     boundary: FitBoundary,
+    wide: bool,
 ) -> (f32, crate::curve::CubicBezier) {
     use crate::curve::{CubicBezier, CurveNode};
 
@@ -463,22 +464,234 @@ fn fit_bezier_segment(
     });
     let left = node(anchors[segment]);
     let right = node(anchors[segment + 1]);
-    let cubic_at = |tension| CubicBezier::between(previous, left, right, next, tension);
+    let cubic_at = |tension| {
+        if wide {
+            CubicBezier::with_wide_handles(previous, left, right, next, tension)
+        } else {
+            CubicBezier::between(previous, left, right, next, tension)
+        }
+    };
     let start = anchors[segment].sample;
     let end = anchors[segment + 1].sample;
     let stride = (end - start).div_ceil(48);
     let mut best = (f32::INFINITY, 0.0, cubic_at(0.0));
-    for tension in [0.0, -0.25, 0.25, -0.5, 0.5, -0.75, 0.75, -1.0, 1.0] {
+    let consider = |tension: f32, best: &mut (f32, f32, CubicBezier)| {
+        let tension = tension.clamp(-1.0, 1.0);
         let cubic = cubic_at(tension);
         let error = ((start + 1)..end)
             .step_by(stride)
             .map(|index| (points[index] - cubic.sample(index as f32)).abs())
             .fold(0.0_f32, f32::max);
         if error < best.0 {
-            best = (error, tension, cubic);
+            *best = (error, tension, cubic);
+        }
+    };
+    for tension in [0.0, -0.25, 0.25, -0.5, 0.5, -0.75, 0.75, -1.0, 1.0] {
+        consider(tension, &mut best);
+    }
+    if wide {
+        for step in [0.105, 0.035, 0.012] {
+            let center = best.1;
+            consider(center - step, &mut best);
+            consider(center + step, &mut best);
         }
     }
     (best.1, best.2)
+}
+
+const SPARSE_ANCHORS: usize = 5;
+const SPARSE_SUSTAINED_ERROR: f32 = 0.029;
+const SPARSE_ATTACK_ERROR: f32 = 0.073;
+
+#[derive(Clone, Copy)]
+struct SparseFitScore {
+    peak: f32,
+    cost: f32,
+    worst_sample: usize,
+}
+
+/// Start with the shortest possible curve and let each cubic carry more of
+/// the envelope before spending another editable node.
+fn fit_sparse_capture(
+    points: &[f32],
+    boundary: FitBoundary,
+    gain_scale: f32,
+) -> Option<Vec<CompressorAnchor>> {
+    let last = points.len() - 1;
+    let pulse_radius = points.len().div_ceil(1024);
+    if (pulse_radius..last - pulse_radius)
+        .any(|index| is_isolated_pulse(points, index, pulse_radius))
+    {
+        // Preserve brief, deep changes with the existing transient-aware fit.
+        return None;
+    }
+    let radius = points.len().div_ceil(128);
+    let tolerances: Vec<_> = (0..=last)
+        .map(|index| {
+            let before = points[index.saturating_sub(radius)];
+            let after = points[(index + radius).min(last)];
+            let center = points[index];
+            let tolerance = if (before - after).abs() * gain_scale >= 0.2 {
+                SPARSE_ATTACK_ERROR
+            } else if (before - center).abs().max((after - center).abs()) < 0.001 {
+                SLOW_ENVELOPE_ERROR
+            } else {
+                SPARSE_SUSTAINED_ERROR
+            };
+            tolerance / gain_scale
+        })
+        .collect();
+    let anchor = |sample| CompressorAnchor {
+        sample,
+        gain: points[sample],
+        tension: 0.0,
+    };
+    let mut anchors = vec![anchor(0), anchor(last)];
+    loop {
+        refine_sparse_positions(points, &tolerances, boundary, &mut anchors);
+        let score = score_sparse_fit(
+            points,
+            &tolerances,
+            boundary,
+            &mut anchors,
+            Some(gain_scale),
+        );
+        if score.peak <= 1.0 {
+            let clustered = anchors
+                .windows(3)
+                .any(|nodes| nodes[2].sample - nodes[0].sample < points.len().div_ceil(100));
+            return (!clustered).then_some(anchors);
+        }
+        if anchors.len() == SPARSE_ANCHORS {
+            return None;
+        }
+        let sample = score.worst_sample.clamp(2, last - 2);
+        let index = anchors.partition_point(|anchor| anchor.sample < sample);
+        if anchors[index].sample == sample {
+            return None;
+        }
+        anchors.insert(index, anchor(sample));
+    }
+}
+
+fn refine_sparse_positions(
+    points: &[f32],
+    tolerances: &[f32],
+    boundary: FitBoundary,
+    anchors: &mut [CompressorAnchor],
+) {
+    let mut best_score = score_sparse_fit(points, tolerances, boundary, anchors, None).cost;
+    let mut trial = anchors.to_vec();
+    for index in 1..anchors.len() - 1 {
+        let left = anchors[index - 1].sample;
+        let right = anchors[index + 1].sample;
+        let span = right - left;
+        let initial = anchors[index];
+        if span <= 4 {
+            continue;
+        }
+        // Probe the span with extra candidates close to both ends. Short
+        // attacks often need a fractional move that a linear grid skips.
+        for fraction in [
+            2, 4, 8, 12, 16, 24, 32, 48, 64, 96, 128, 160, 192, 224, 240, 248, 252, 254,
+        ] {
+            let sample = left + (span * fraction / 256).clamp(2, span - 2);
+            for gain in [initial.gain, points[sample]] {
+                trial[index] = CompressorAnchor {
+                    sample,
+                    gain,
+                    tension: 0.0,
+                };
+                let score = score_sparse_fit(points, tolerances, boundary, &mut trial, None).cost;
+                if score < best_score {
+                    best_score = score;
+                    anchors.copy_from_slice(&trial);
+                }
+            }
+        }
+        for divisions in [128, 512, 2048] {
+            let step = (span / divisions).max(1);
+            let center = anchors[index];
+            for sample in [center.sample.saturating_sub(step), center.sample + step] {
+                let sample = sample.clamp(left + 2, right - 2);
+                for gain in [center.gain, points[sample]] {
+                    trial[index] = CompressorAnchor {
+                        sample,
+                        gain,
+                        tension: 0.0,
+                    };
+                    let score =
+                        score_sparse_fit(points, tolerances, boundary, &mut trial, None).cost;
+                    if score < best_score {
+                        best_score = score;
+                        anchors.copy_from_slice(&trial);
+                    }
+                }
+            }
+        }
+        trial.copy_from_slice(anchors);
+    }
+}
+
+fn score_sparse_fit(
+    points: &[f32],
+    tolerances: &[f32],
+    boundary: FitBoundary,
+    anchors: &mut [CompressorAnchor],
+    verification_scale: Option<f32>,
+) -> SparseFitScore {
+    let mut peak = 0.0;
+    let mut worst_sample = 0;
+    let mut squared_error = 0.0;
+    let mut count = 0;
+    let window = points.len().div_ceil(64);
+    let mut recent =
+        verification_scale.map(|scale| (vec![0.0; window], scale / (window as f32 * 0.026)));
+    let mut sum = 0.0;
+    for segment in 0..anchors.len() - 1 {
+        let (tension, cubic) = fit_bezier_segment(points, anchors, segment, boundary, true);
+        anchors[segment].tension = tension;
+        let start = anchors[segment].sample;
+        let end = anchors[segment + 1].sample;
+        let stride = if verification_scale.is_some() {
+            1
+        } else {
+            (end - start).div_ceil(64)
+        };
+        for index in (start..end).step_by(stride) {
+            let error = cubic.sample(index as f32) - points[index];
+            if let Some((recent, average_scale)) = recent.as_mut() {
+                let slot = &mut recent[index % window];
+                sum += error - *slot;
+                *slot = error;
+                let average = sum.abs() * *average_scale;
+                if average > peak {
+                    peak = average;
+                    worst_sample = index.saturating_sub(window / 2);
+                }
+            }
+            let error = error.abs() / tolerances[index];
+            if error > peak {
+                peak = error;
+                worst_sample = index;
+            }
+            squared_error += error * error;
+            count += 1;
+        }
+    }
+    let rms = (squared_error / count.max(1) as f32).sqrt();
+    SparseFitScore {
+        peak,
+        cost: peak + 0.15 * rms,
+        worst_sample,
+    }
+}
+
+fn is_isolated_pulse(points: &[f32], index: usize, radius: usize) -> bool {
+    let gain = points[index];
+    let left = points[index.saturating_sub(radius)] - gain;
+    let right = points[(index + radius).min(points.len() - 1)] - gain;
+    left.min(right) >= 0.08 || left.max(right) <= -0.08
 }
 
 /// Refit after removing a point. Measuring the gain averaged over a short
@@ -499,12 +712,7 @@ fn simplify_compressor_anchors(
     let isolated_pulses: Vec<_> = anchors
         .iter()
         .map(|anchor| anchor.sample)
-        .filter(|&index| {
-            let gain = points[index];
-            let left = points[index.saturating_sub(pulse_radius)] - gain;
-            let right = points[(index + pulse_radius).min(points.len() - 1)] - gain;
-            left.min(right) >= 0.08 || left.max(right) <= -0.08
-        })
+        .filter(|&index| is_isolated_pulse(points, index, pulse_radius))
         .collect();
     let mut recent = vec![0.0; window];
     let protected = |sample: usize| {
@@ -579,7 +787,7 @@ fn simplification_error(
     let mut sum = 0.0;
     let mut largest = 0.0_f32;
     for segment in 0..candidate.len() - 1 {
-        let (tension, cubic) = fit_bezier_segment(points, candidate, segment, boundary);
+        let (tension, cubic) = fit_bezier_segment(points, candidate, segment, boundary, false);
         candidate[segment].tension = tension;
         let start = candidate[segment].sample;
         let end = candidate[segment + 1].sample;
@@ -611,7 +819,10 @@ fn simplification_error(
 }
 
 /// Fit one captured cycle to editable cubic Bézier segments off the audio thread.
-pub(crate) fn editable_curve_from_capture(points: &[f32]) -> crate::curve::EditableCurve {
+pub(crate) fn editable_curve_from_capture(
+    points: &[f32],
+    gain_scale: f32,
+) -> crate::curve::EditableCurve {
     use crate::curve::{CurveNode, CurveSegment, EditableCurve};
 
     let clipped_seam = (points[0] - points[CAPTURE_POINTS - 1]).abs() > BEZIER_FIT_ERROR;
@@ -620,7 +831,10 @@ pub(crate) fn editable_curve_from_capture(points: &[f32]) -> crate::curve::Edita
     } else {
         FitBoundary::Joined
     };
-    let (mut nodes, mut segments): (Vec<_>, Vec<_>) = fit_bezier(points, boundary)
+    let sparse = fit_sparse_capture(points, boundary, gain_scale);
+    let wide_bezier_handles = sparse.is_some();
+    let anchors = sparse.unwrap_or_else(|| fit_bezier(points, boundary));
+    let (mut nodes, mut segments): (Vec<_>, Vec<_>) = anchors
         .into_iter()
         .map(|anchor| {
             let index = anchor.sample;
@@ -665,6 +879,7 @@ pub(crate) fn editable_curve_from_capture(points: &[f32]) -> crate::curve::Edita
         origin_is_clip: clipped_seam,
         high_resolution: true,
         smooth_bezier: true,
+        wide_bezier_handles,
         ..EditableCurve::default()
     }
     .normalized()
@@ -829,7 +1044,7 @@ mod tests {
         points[31] = 0.8;
         points[32] = 0.2;
         points[33] = 0.7;
-        let curve = editable_curve_from_capture(&points);
+        let curve = editable_curve_from_capture(&points, 1.0);
         assert!(curve.nodes.len() <= MAX_COMPRESSOR_ANCHORS);
         for (index, value) in points.iter().enumerate().take(CAPTURE_POINTS - 1) {
             let phase = index as f32 / (CAPTURE_POINTS - 1) as f32;
@@ -850,7 +1065,7 @@ mod tests {
             let ripple = if index % 2 == 0 { 0.001 } else { -0.001 };
             (envelope + ripple).min(1.0)
         });
-        let curve = editable_curve_from_capture(&points);
+        let curve = editable_curve_from_capture(&points, 1.0);
         assert!(curve.smooth_bezier);
         assert!(curve.nodes.len() <= MAX_COMPRESSOR_ANCHORS);
         for (index, point) in points.iter().enumerate().step_by(16) {
@@ -887,7 +1102,7 @@ mod tests {
             (envelope(phase) + ripple).clamp(0.0, 1.0)
         });
 
-        let curve = editable_curve_from_capture(&points);
+        let curve = editable_curve_from_capture(&points, 1.0);
         assert!(curve.smooth_bezier);
         assert!(curve.nodes.len() <= MAX_COMPRESSOR_ANCHORS);
         for index in 0..1024 {
@@ -914,7 +1129,7 @@ mod tests {
                 let phase = index as f32 / (CAPTURE_POINTS - 1) as f32;
                 envelope(phase)
             });
-            let curve = editable_curve_from_capture(&points);
+            let curve = editable_curve_from_capture(&points, 1.0);
             let nodes = if curve.origin_is_clip {
                 &curve.nodes[1..curve.nodes.len() - 1]
             } else {
@@ -937,10 +1152,52 @@ mod tests {
     }
 
     #[test]
+    fn sparse_fit_uses_curvature_for_the_attack_and_long_recovery() {
+        use crate::curve::sample_editable_curve;
+
+        let recovery = |phase: f32| {
+            let attack = 0.19 + 0.81 * (-195.0 * phase).exp();
+            let early = ((phase - 0.07) / 0.57).clamp(0.0, 1.0);
+            let late = ((phase - 0.41) / 0.59).clamp(0.0, 1.0);
+            let late = late * late * (3.0 - 2.0 * late);
+            let shoulder = ((phase - 0.474) / 0.022).clamp(0.0, 1.0);
+            let release = 0.18 + 0.20 * early.powf(1.32) + 0.045 * shoulder + 0.558 * late;
+            attack.max(release)
+        };
+        let points: [f32; CAPTURE_POINTS] = std::array::from_fn(|index| {
+            let phase = index as f32 / (CAPTURE_POINTS - 1) as f32;
+            (recovery(phase) + 0.005 * (phase * 400.0).sin() * (std::f32::consts::PI * phase).sin())
+                .clamp(0.0, 1.0)
+        });
+
+        let curve = editable_curve_from_capture(&points, 1.0);
+        let nodes = &curve.nodes[1..curve.nodes.len() - 1];
+        assert!(curve.origin_is_clip && curve.wide_bezier_handles);
+        assert!(nodes.len() <= 5, "editable nodes: {nodes:?}");
+        assert!(
+            nodes.iter().filter(|node| node.x < 0.04).count() <= 2,
+            "{nodes:?}"
+        );
+        assert!(curve
+            .segments
+            .iter()
+            .any(|segment| segment.tension.abs() > 0.25));
+        for step in 1..256 {
+            let phase = step as f32 / 256.0;
+            let actual = sample_editable_curve(&curve, phase);
+            let tolerance = if phase < 0.025 { 0.075 } else { 0.03 };
+            assert!(
+                (actual - recovery(phase)).abs() < tolerance,
+                "phase {phase}: {actual}"
+            );
+        }
+    }
+
+    #[test]
     fn fitted_curve_keeps_a_sharp_transient_at_the_cycle_cut() {
         let mut points = [1.0; CAPTURE_POINTS];
         points[..100].fill(0.2);
-        let curve = editable_curve_from_capture(&points);
+        let curve = editable_curve_from_capture(&points, 1.0);
         assert!(curve.origin_is_clip);
         assert!((crate::curve::sample_editable_curve(&curve, 0.0) - 0.2).abs() < 0.03);
         assert!((crate::curve::sample_editable_curve(&curve, 0.999) - 1.0).abs() < 0.03);
@@ -948,7 +1205,7 @@ mod tests {
 
     #[test]
     fn fitted_constant_curve_needs_only_endpoints() {
-        let curve = editable_curve_from_capture(&[0.5; CAPTURE_POINTS]);
+        let curve = editable_curve_from_capture(&[0.5; CAPTURE_POINTS], 1.0);
         assert_eq!(curve.nodes.len(), 2);
         assert_eq!(curve.nodes[0].y, 0.5);
     }

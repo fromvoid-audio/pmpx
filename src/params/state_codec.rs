@@ -677,7 +677,9 @@ fn encode_phase_metadata(payload: &mut Vec<u8>, curve: &EditableCurve) {
     if curve.high_resolution {
         payload.extend_from_slice(&HIGH_RESOLUTION_METADATA_MAGIC.to_le_bytes());
     }
-    if curve.smooth_bezier {
+    if curve.wide_bezier_handles {
+        payload.extend_from_slice(&WIDE_BEZIER_METADATA_MAGIC.to_le_bytes());
+    } else if curve.smooth_bezier {
         payload.extend_from_slice(&BEZIER_METADATA_MAGIC.to_le_bytes());
     }
 }
@@ -750,6 +752,10 @@ fn decode_curve(
                 }
                 ORIGIN_METADATA_MAGIC if with_origin_metadata => {
                     curve.origin_is_clip = true;
+                }
+                WIDE_BEZIER_METADATA_MAGIC if with_capture_metadata => {
+                    curve.smooth_bezier = true;
+                    curve.wide_bezier_handles = true;
                 }
                 BEZIER_METADATA_MAGIC if with_capture_metadata => {
                     curve.smooth_bezier = true;

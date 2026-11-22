@@ -2269,6 +2269,7 @@ fn fit_candidate(
         nodes,
         high_resolution: origin.high_resolution,
         smooth_bezier: origin.smooth_bezier,
+        wide_bezier_handles: origin.wide_bezier_handles,
         ..EditableCurve::default()
     };
     let mut max_error: f32 = 0.0;

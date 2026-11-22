@@ -12,7 +12,8 @@ Older payloads seed references from their working snapshots and default Delay
 to zero, so they reopen clean.
 
 Project payload v24 and preset-store v18 append compressor envelope smoothing.
-Older compressor settings load with smoothing at 0 ms.
+Older compressor settings load with smoothing at 0 ms. Project v25, preset-store
+v19 and curve-slot v5 support the wider Bézier handles used in sparse captures.
 
 Changing A/B publishes the selected snapshot through the existing atomic audio
 parameter boundary. The processor never reads the UI-owned snapshot lock.

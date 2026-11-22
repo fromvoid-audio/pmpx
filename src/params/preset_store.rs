@@ -7,7 +7,7 @@ use std::time::{SystemTime, UNIX_EPOCH};
 use std::{cell::RefCell, panic::AssertUnwindSafe};
 
 const PRESET_STORE_MAGIC: &[u8; 4] = b"PPBK";
-const PRESET_STORE_VERSION: u32 = 18;
+const PRESET_STORE_VERSION: u32 = 19;
 const PRESET_STORE_PATH_ENV: &str = "PUMP_PRESET_BANK_PATH";
 const PRESET_STORE_FILE_NAME: &str = "preset-bank.bin";
 const MIN_CURVE_BYTES: usize = 2 * 8 + 4;
@@ -340,7 +340,9 @@ fn encode_phase_metadata(payload: &mut Vec<u8>, curve: &EditableCurve) {
     if curve.high_resolution {
         payload.extend_from_slice(&HIGH_RESOLUTION_METADATA_MAGIC.to_le_bytes());
     }
-    if curve.smooth_bezier {
+    if curve.wide_bezier_handles {
+        payload.extend_from_slice(&WIDE_BEZIER_METADATA_MAGIC.to_le_bytes());
+    } else if curve.smooth_bezier {
         payload.extend_from_slice(&BEZIER_METADATA_MAGIC.to_le_bytes());
     }
 }
@@ -649,6 +651,10 @@ fn decode_curve(
                 }
                 ORIGIN_METADATA_MAGIC if with_origin_metadata => {
                     curve.origin_is_clip = true;
+                }
+                WIDE_BEZIER_METADATA_MAGIC if with_capture_metadata => {
+                    curve.smooth_bezier = true;
+                    curve.wide_bezier_handles = true;
                 }
                 BEZIER_METADATA_MAGIC if with_capture_metadata => {
                     curve.smooth_bezier = true;
@@ -1101,6 +1107,8 @@ mod tests {
         let mut bank = PumpPresetBank::default_init();
         let mut captured = crate::curve::precise_test_curve();
         captured.smooth_bezier = true;
+        captured.wide_bezier_handles = true;
+        captured.segments[0].tension = -0.83;
         let curve = crate::curve::cyclically_offset_editable_curve(&captured, 0.3);
         bank.presets[0].editable_curve = curve.clone();
         bank.presets[0].quick_slots[0].curve = curve;

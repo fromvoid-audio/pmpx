@@ -62,6 +62,9 @@ pub struct EditableCurve {
     pub high_resolution: bool,
     /// Use shape-preserving cubic Bézier segments with shared node tangents.
     pub smooth_bezier: bool,
+    /// Allow the Bézier time handles to travel farther for sparse captures.
+    #[doc(hidden)]
+    pub wide_bezier_handles: bool,
 }
 
 impl Default for EditableCurve {
@@ -74,6 +77,7 @@ impl Default for EditableCurve {
             origin_is_clip: false,
             high_resolution: false,
             smooth_bezier: false,
+            wide_bezier_handles: false,
         }
     }
 }
@@ -95,9 +99,11 @@ impl EditableCurve {
             self.nodes.len().saturating_sub(1),
             &segment_sources,
         );
+        self.smooth_bezier |= self.wide_bezier_handles;
         if let Some(source) = self.phase_source.as_mut() {
             source.high_resolution |= self.high_resolution;
             source.smooth_bezier |= self.smooth_bezier;
+            source.wide_bezier_handles |= self.wide_bezier_handles;
             source.normalize_in_place();
         }
         if self.origin_is_clip && self.nodes.len() < 3 {
@@ -191,6 +197,7 @@ pub fn cyclically_offset_editable_curve(curve: &EditableCurve, delta: f32) -> Ed
         origin_is_clip: origin.origin_is_clip,
         high_resolution: origin.high_resolution,
         smooth_bezier: origin.smooth_bezier,
+        wide_bezier_handles: origin.wide_bezier_handles,
     };
     for window in offset.nodes.windows(2) {
         let left = window[0].x;
@@ -295,6 +302,7 @@ fn exact_phase_source(curve: &EditableCurve) -> EditableCurve {
             origin_is_clip: curve.origin_is_clip,
             high_resolution: curve.high_resolution,
             smooth_bezier: curve.smooth_bezier,
+            wide_bezier_handles: curve.wide_bezier_handles,
             ..EditableCurve::default()
         })
 }
@@ -515,7 +523,11 @@ pub(crate) fn bezier_edge(curve: &EditableCurve, index: usize, tension: f32) -> 
     } else {
         (nodes[index + 1], nodes[index + 2])
     };
-    CubicBezier::between(Some(previous), left, right, Some(next), tension)
+    if curve.wide_bezier_handles {
+        CubicBezier::with_wide_handles(Some(previous), left, right, Some(next), tension)
+    } else {
+        CubicBezier::between(Some(previous), left, right, Some(next), tension)
+    }
 }
 
 /// A cubic with monotone x and gain bounded by its endpoints.
@@ -525,7 +537,13 @@ pub(crate) struct CubicBezier {
     pub(crate) control_a: CurveNode,
     pub(crate) control_b: CurveNode,
     pub(crate) end: CurveNode,
-    time_bias: f32,
+    time: BezierTime,
+}
+
+#[derive(Clone, Copy)]
+enum BezierTime {
+    Quadratic(f32),
+    Cubic { a: f32, b: f32, c: f32 },
 }
 
 impl CubicBezier {
@@ -552,25 +570,108 @@ impl CubicBezier {
                 y: end.y - end_handle * next.map_or(0.0, |next| tangent(start, end, next)),
             },
             end,
-            time_bias,
+            time: BezierTime::Quadratic(3.0 * time_bias),
+        }
+    }
+
+    pub(crate) fn with_wide_handles(
+        previous: Option<CurveNode>,
+        start: CurveNode,
+        end: CurveNode,
+        next: Option<CurveNode>,
+        tension: f32,
+    ) -> Self {
+        if tension == 0.0 {
+            return Self::between(previous, start, end, next, tension);
+        }
+        let span = end.x - start.x;
+        let weight = tension.abs().min(1.0);
+        // At full curvature, both handles can sit near the same side of the
+        // segment. This gives a steep attack or recovery one cubic instead of
+        // several tightly spaced nodes.
+        let (target_a, target_b) = if tension < 0.0 {
+            (0.001, 0.04)
+        } else {
+            (0.96, 0.999)
+        };
+        let slope_a = previous.map_or(0.0, |node| tangent(node, start, end));
+        let slope_b = next.map_or(0.0, |node| tangent(start, end, node));
+        let gain_span = (end.y - start.y).abs();
+        let length = |fraction: f32, slope: f32| {
+            let length = span * fraction;
+            if slope == 0.0 {
+                length
+            } else {
+                length.min(gain_span / slope.abs())
+            }
+        };
+        let start_handle = length(lerp(1.0 / 3.0, target_a, weight), slope_a);
+        let end_handle = length(1.0 - lerp(2.0 / 3.0, target_b, weight), slope_b);
+        let x_a = start_handle / span;
+        let x_b = 1.0 - end_handle / span;
+        Self {
+            start,
+            end,
+            control_a: CurveNode {
+                x: start.x + start_handle,
+                y: start.y + start_handle * slope_a,
+            },
+            control_b: CurveNode {
+                x: end.x - end_handle,
+                y: end.y - end_handle * slope_b,
+            },
+            time: BezierTime::Cubic {
+                a: 1.0 - 3.0 * x_b + 3.0 * x_a,
+                b: 3.0 * x_b - 6.0 * x_a,
+                c: 3.0 * x_a,
+            },
         }
     }
 
     pub(crate) fn sample(self, x: f32) -> f32 {
         let phase = ((x - self.start.x) / (self.end.x - self.start.x)).clamp(0.0, 1.0);
-        let t = if self.time_bias == 0.0 || phase == 0.0 || phase == 1.0 {
-            phase
-        } else {
-            // Invert x(t) = t + bias * t * (1 - t) without cancellation.
-            let bias = 3.0 * self.time_bias;
-            let linear = 1.0 + bias;
-            2.0 * phase / (linear + (linear * linear - 4.0 * bias * phase).sqrt())
+        let t = match self.time {
+            _ if phase == 0.0 || phase == 1.0 => phase,
+            BezierTime::Quadratic(0.0) => phase,
+            BezierTime::Quadratic(bias) => {
+                // Invert x(t) = t + bias * t * (1 - t) without cancellation.
+                let linear = 1.0 + bias;
+                2.0 * phase / (linear + (linear * linear - 4.0 * bias * phase).sqrt())
+            }
+            BezierTime::Cubic { a, b, c } => invert_bezier_time(phase, a, b, c),
         };
         let inverse = 1.0 - t;
         let gain = inverse * inverse * (inverse * self.start.y + 3.0 * t * self.control_a.y)
             + t * t * (3.0 * inverse * self.control_b.y + t * self.end.y);
         gain.clamp(self.start.y.min(self.end.y), self.start.y.max(self.end.y))
     }
+}
+
+fn invert_bezier_time(phase: f32, a: f32, b: f32, c: f32) -> f32 {
+    let mut lower = 0.0;
+    let mut upper = 1.0;
+    let mut t = phase;
+    // Ordered time handles make x(t) monotonic. Keep a bracket for nearly
+    // vertical edges, where a Newton step can overshoot.
+    for _ in 0..12 {
+        let error = ((a * t + b) * t + c) * t - phase;
+        if error.abs() < 1.0e-7 {
+            break;
+        }
+        if error < 0.0 {
+            lower = t;
+        } else {
+            upper = t;
+        }
+        let derivative = (3.0 * a * t + 2.0 * b) * t + c;
+        let step = t - error / derivative;
+        t = if step > lower && step < upper {
+            step
+        } else {
+            (lower + upper) * 0.5
+        };
+    }
+    t
 }
 
 /// Weighted harmonic slope at a node. Turning points are flat and the

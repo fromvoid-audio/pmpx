@@ -1380,7 +1380,7 @@ impl PumpEditorState {
         for point in &mut points {
             *point /= scale;
         }
-        let curve = crate::compressor_capture::editable_curve_from_capture(&points);
+        let curve = crate::compressor_capture::editable_curve_from_capture(&points, scale);
         let before = self.snapshot();
         let mut changed = false;
         for (id, target, current) in [

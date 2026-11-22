@@ -7,7 +7,8 @@
 use super::*;
 
 pub(crate) const STATE_MAGIC: &[u8; 4] = b"PMP2";
-pub(crate) const STATE_VERSION: u32 = 24;
+pub(crate) const STATE_VERSION: u32 = 25;
+pub(super) const WIDE_BEZIER_METADATA_MAGIC: u32 = u32::from_le_bytes(*b"WBEZ");
 pub(super) const BEZIER_METADATA_MAGIC: u32 = u32::from_le_bytes(*b"BEZR");
 
 /// The two independently editable Pump sound sides.
@@ -683,6 +684,7 @@ pub(crate) fn curve_near_eq(left: &EditableCurve, right: &EditableCurve) -> bool
         && left.origin_is_clip == right.origin_is_clip
         && left.high_resolution == right.high_resolution
         && left.smooth_bezier == right.smooth_bezier
+        && left.wide_bezier_handles == right.wide_bezier_handles
 }
 
 /// Shared atomic parameter/state storage across threads.

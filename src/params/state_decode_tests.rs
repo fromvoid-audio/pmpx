@@ -1144,6 +1144,8 @@ fn captured_curve_precision_survives_project_and_sound_snapshots() {
     let source = PumpParams::new();
     let mut captured = crate::curve::precise_test_curve();
     captured.smooth_bezier = true;
+    captured.wide_bezier_handles = true;
+    captured.segments[0].tension = -0.83;
     let curve = crate::curve::cyclically_offset_editable_curve(&captured, 0.3);
     source.set_editable_curve_preserving_phase(&curve);
     assert!(source.store_active_sound_state());
