@@ -347,61 +347,56 @@ impl CaptureExchange {
 
 const MAX_COMPRESSOR_ANCHORS: usize = 12;
 const BEZIER_FIT_ERROR: f32 = 0.005;
+const SIMPLIFICATION_ERROR: f32 = 0.016;
+const SLOW_ENVELOPE_ERROR: f32 = 0.015;
+const CLIPPED_START_PHASE: f32 = 0.000001;
 
 #[derive(Clone, Copy)]
 pub(crate) struct CompressorAnchor {
     pub(crate) sample: usize,
+    pub(crate) gain: f32,
     pub(crate) tension: f32,
+}
+
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum FitBoundary {
+    Open,
+    Joined,
+    Clipped,
 }
 
 /// Fit the main gain movement within a small editing budget. Adjust the
 /// existing Bézier handles before spending another anchor.
 pub(crate) fn fit_compressor_bezier(points: &[f32]) -> Vec<CompressorAnchor> {
-    use crate::curve::{CubicBezier, CurveNode};
+    fit_bezier(points, FitBoundary::Open)
+}
 
+fn fit_bezier(points: &[f32], boundary: FitBoundary) -> Vec<CompressorAnchor> {
     let anchor = |sample| CompressorAnchor {
         sample,
+        gain: points[sample],
         tension: 0.0,
     };
     if points.len() < 2 {
         return (0..points.len()).map(anchor).collect();
     }
 
-    let node = |anchor: CompressorAnchor| CurveNode {
-        x: anchor.sample as f32,
-        y: points[anchor.sample],
-    };
     let mut anchors = vec![anchor(0), anchor(points.len() - 1)];
     loop {
         let mut greatest = (BEZIER_FIT_ERROR, 0, 0);
         for segment in 0..anchors.len() - 1 {
+            let (tension, cubic) = fit_bezier_segment(points, &anchors, segment, boundary);
             let start = anchors[segment].sample;
             let end = anchors[segment + 1].sample;
-            let previous = segment.checked_sub(1).map(|index| node(anchors[index]));
-            let next = anchors.get(segment + 2).copied().map(node);
-            let left = node(anchors[segment]);
-            let right = node(anchors[segment + 1]);
-            let cubic_at = |tension| CubicBezier::between(previous, left, right, next, tension);
-            let stride = (end - start).div_ceil(48);
-            let mut best = (f32::INFINITY, 0.0, cubic_at(0.0));
-            // Probe the span at bounded resolution. The full scan below still
-            // finds narrow transients when deciding where to put a new point.
-            for tension in [0.0, -0.25, 0.25, -0.5, 0.5, -0.75, 0.75, -1.0, 1.0] {
-                let cubic = cubic_at(tension);
-                let error = ((start + 1)..end)
-                    .step_by(stride)
-                    .map(|index| (points[index] - cubic.sample(index as f32)).abs())
-                    .fold(0.0_f32, f32::max);
-                if error < best.0 {
-                    best = (error, tension, cubic);
-                }
-            }
-            anchors[segment].tension = best.1;
+            anchors[segment].tension = tension;
             if anchors.len() == MAX_COMPRESSOR_ANCHORS {
                 continue;
             }
             for (index, &sample) in points.iter().enumerate().take(end).skip(start + 1) {
-                let error = (sample - best.2.sample(index as f32)).abs();
+                if boundary == FitBoundary::Clipped && index == points.len() - 2 {
+                    continue;
+                }
+                let error = (sample - cubic.sample(index as f32)).abs();
                 if error > greatest.0 {
                     greatest = (error, segment + 1, index);
                 }
@@ -412,7 +407,207 @@ pub(crate) fn fit_compressor_bezier(points: &[f32]) -> Vec<CompressorAnchor> {
         }
         anchors.insert(greatest.1, anchor(greatest.2));
     }
-    anchors
+    simplify_compressor_anchors(points, anchors, boundary)
+}
+
+fn fit_bezier_segment(
+    points: &[f32],
+    anchors: &[CompressorAnchor],
+    segment: usize,
+    boundary: FitBoundary,
+) -> (f32, crate::curve::CubicBezier) {
+    use crate::curve::{CubicBezier, CurveNode};
+
+    let last_sample = points.len() - 1;
+    let cycle = last_sample as f32;
+    let node = |anchor: CompressorAnchor| {
+        let mut node = CurveNode {
+            x: anchor.sample as f32,
+            y: anchor.gain,
+        };
+        match boundary {
+            FitBoundary::Clipped if anchor.sample == 0 => node.x = CLIPPED_START_PHASE * cycle,
+            FitBoundary::Clipped if anchor.sample == last_sample => node.x = cycle - 1.0,
+            FitBoundary::Joined if anchor.sample == last_sample => node.y = points[0],
+            _ => {}
+        }
+        node
+    };
+    // Use the same neighbors at the cycle cut as the saved Bézier curve.
+    // The live trace is open because its first and last bins may be incomplete.
+    let previous = segment
+        .checked_sub(1)
+        .map(|index| node(anchors[index]))
+        .or_else(|| {
+            if boundary == FitBoundary::Open {
+                return None;
+            }
+            let index = anchors.len()
+                - if boundary == FitBoundary::Clipped {
+                    1
+                } else {
+                    2
+                };
+            let mut previous = node(anchors[index]);
+            previous.x -= cycle;
+            Some(previous)
+        });
+    let next = anchors.get(segment + 2).copied().map(node).or_else(|| {
+        if boundary == FitBoundary::Open {
+            return None;
+        }
+        let index = usize::from(boundary == FitBoundary::Joined);
+        let mut next = node(anchors[index]);
+        next.x += cycle;
+        Some(next)
+    });
+    let left = node(anchors[segment]);
+    let right = node(anchors[segment + 1]);
+    let cubic_at = |tension| CubicBezier::between(previous, left, right, next, tension);
+    let start = anchors[segment].sample;
+    let end = anchors[segment + 1].sample;
+    let stride = (end - start).div_ceil(48);
+    let mut best = (f32::INFINITY, 0.0, cubic_at(0.0));
+    for tension in [0.0, -0.25, 0.25, -0.5, 0.5, -0.75, 0.75, -1.0, 1.0] {
+        let cubic = cubic_at(tension);
+        let error = ((start + 1)..end)
+            .step_by(stride)
+            .map(|index| (points[index] - cubic.sample(index as f32)).abs())
+            .fold(0.0_f32, f32::max);
+        if error < best.0 {
+            best = (error, tension, cubic);
+        }
+    }
+    (best.1, best.2)
+}
+
+/// Refit after removing a point. Measuring the gain averaged over a short
+/// sliding window keeps important timing and recovery shape while forgiving
+/// sample-level differences in an almost vertical attack.
+fn simplify_compressor_anchors(
+    points: &[f32],
+    mut anchors: Vec<CompressorAnchor>,
+    boundary: FitBoundary,
+) -> Vec<CompressorAnchor> {
+    if anchors.len() <= 2 {
+        return anchors;
+    }
+    // Score timing at about 1.6% of a cycle. Protect genuine pulses that
+    // return toward their starting level within about 0.1% on both sides.
+    let window = points.len().div_ceil(64);
+    let pulse_radius = points.len().div_ceil(1024);
+    let isolated_pulses: Vec<_> = anchors
+        .iter()
+        .map(|anchor| anchor.sample)
+        .filter(|&index| {
+            let gain = points[index];
+            let left = points[index.saturating_sub(pulse_radius)] - gain;
+            let right = points[(index + pulse_radius).min(points.len() - 1)] - gain;
+            left.min(right) >= 0.08 || left.max(right) <= -0.08
+        })
+        .collect();
+    let mut recent = vec![0.0; window];
+    let protected = |sample: usize| {
+        isolated_pulses
+            .iter()
+            .any(|pulse| sample.abs_diff(*pulse) <= pulse_radius)
+    };
+    loop {
+        let mut best_error = SIMPLIFICATION_ERROR;
+        let mut best = None;
+        for index in 1..anchors.len() - 1 {
+            let middle = anchors[index];
+            if protected(middle.sample) {
+                continue;
+            }
+            let mut candidate = anchors.clone();
+            candidate.remove(index);
+            let error =
+                simplification_error(points, &mut candidate, &mut recent, best_error, boundary);
+            if error < best_error {
+                best_error = error;
+                best = Some(candidate.clone());
+            }
+
+            let left = anchors[index - 1];
+            let next = anchors[index + 1];
+            let entry = middle.gain - left.gain;
+            let tail = next.gain - middle.gain;
+            let span = next.sample - left.sample;
+            // Merge the nearly settled end of a fast attack into one point.
+            // Keep its gain and fit when it settles, using the attack's area
+            // instead of preserving two nearly coincident samples.
+            if index + 1 < anchors.len() - 1
+                && !protected(next.sample)
+                && span <= window
+                && entry.abs() >= 0.08
+                && tail.abs() <= entry.abs() * 0.5
+                && entry * tail >= 0.0
+            {
+                let step = span.div_ceil(8);
+                for sample in ((left.sample + step).max(2)..next.sample).step_by(step) {
+                    candidate[index].sample = sample;
+                    let error = simplification_error(
+                        points,
+                        &mut candidate,
+                        &mut recent,
+                        best_error,
+                        boundary,
+                    );
+                    if error < best_error {
+                        best_error = error;
+                        best = Some(candidate.clone());
+                    }
+                }
+            }
+        }
+        let Some(simpler) = best else {
+            return anchors;
+        };
+        anchors = simpler;
+    }
+}
+
+fn simplification_error(
+    points: &[f32],
+    candidate: &mut [CompressorAnchor],
+    recent: &mut [f32],
+    limit: f32,
+    boundary: FitBoundary,
+) -> f32 {
+    let window = recent.len();
+    let mut sum = 0.0;
+    let mut largest = 0.0_f32;
+    for segment in 0..candidate.len() - 1 {
+        let (tension, cubic) = fit_bezier_segment(points, candidate, segment, boundary);
+        candidate[segment].tension = tension;
+        let start = candidate[segment].sample;
+        let end = candidate[segment + 1].sample;
+        for (index, &gain) in points.iter().enumerate().take(end).skip(start) {
+            let difference = gain - cubic.sample(index as f32);
+            if difference.abs() > SLOW_ENVELOPE_ERROR {
+                // Only fast transitions can trade peak error for a better
+                // time-averaged fit. Sustained gain stays close pointwise.
+                let radius = window / 2;
+                let before = points[index.saturating_sub(radius)];
+                let after = points[(index + radius).min(points.len() - 1)];
+                if (before - after).abs() < 0.2 {
+                    return f32::INFINITY;
+                }
+            }
+            let slot = &mut recent[index % window];
+            sum += difference;
+            if index >= window {
+                sum -= *slot;
+            }
+            *slot = difference;
+            largest = largest.max(sum.abs() / window as f32);
+        }
+        if largest >= limit {
+            return largest;
+        }
+    }
+    largest
 }
 
 /// Fit one captured cycle to editable cubic Bézier segments off the audio thread.
@@ -420,17 +615,19 @@ pub(crate) fn editable_curve_from_capture(points: &[f32]) -> crate::curve::Edita
     use crate::curve::{CurveNode, CurveSegment, EditableCurve};
 
     let clipped_seam = (points[0] - points[CAPTURE_POINTS - 1]).abs() > BEZIER_FIT_ERROR;
-    let (mut nodes, mut segments): (Vec<_>, Vec<_>) = fit_compressor_bezier(points)
+    let boundary = if clipped_seam {
+        FitBoundary::Clipped
+    } else {
+        FitBoundary::Joined
+    };
+    let (mut nodes, mut segments): (Vec<_>, Vec<_>) = fit_bezier(points, boundary)
         .into_iter()
-        .filter(|anchor| {
-            !clipped_seam || (anchor.sample != 1 && anchor.sample != CAPTURE_POINTS - 2)
-        })
         .map(|anchor| {
             let index = anchor.sample;
             (
                 CurveNode {
                     x: index as f32 / (CAPTURE_POINTS - 1) as f32,
-                    y: points[index].clamp(0.0, 1.0),
+                    y: anchor.gain.clamp(0.0, 1.0),
                 },
                 CurveSegment {
                     tension: anchor.tension,
@@ -447,7 +644,7 @@ pub(crate) fn editable_curve_from_capture(points: &[f32]) -> crate::curve::Edita
         nodes.insert(
             1,
             CurveNode {
-                x: 0.000001,
+                x: CLIPPED_START_PHASE,
                 y: points[0].clamp(0.0, 1.0),
             },
         );
@@ -659,7 +856,7 @@ mod tests {
         for (index, point) in points.iter().enumerate().step_by(16) {
             let phase = index as f32 / (CAPTURE_POINTS - 1) as f32;
             assert!(
-                (sample_editable_curve(&curve, phase) - point).abs() < BEZIER_FIT_ERROR + 0.0001
+                (sample_editable_curve(&curve, phase) - point).abs() < SLOW_ENVELOPE_ERROR + 0.0001
             );
         }
         for node in &curve.nodes[..curve.nodes.len() - 1] {
@@ -700,6 +897,42 @@ mod tests {
                 (gain - envelope(phase)).abs() < 0.03,
                 "phase {phase}, gain {gain}"
             );
+        }
+    }
+
+    #[test]
+    fn steep_attack_does_not_stack_editable_points() {
+        use crate::curve::sample_editable_curve;
+
+        for end_gain in [1.0, 0.94] {
+            let envelope = |phase: f32| {
+                let attack = 0.27 + 0.73 * (-1800.0 * phase).exp();
+                let release = 0.27 + (end_gain - 0.27) * phase * phase * (3.0 - 2.0 * phase);
+                attack.max(release)
+            };
+            let points: [f32; CAPTURE_POINTS] = std::array::from_fn(|index| {
+                let phase = index as f32 / (CAPTURE_POINTS - 1) as f32;
+                envelope(phase)
+            });
+            let curve = editable_curve_from_capture(&points);
+            let nodes = if curve.origin_is_clip {
+                &curve.nodes[1..curve.nodes.len() - 1]
+            } else {
+                curve.nodes.as_slice()
+            };
+            assert!(nodes.len() <= 5, "points: {nodes:?}");
+            let attack_points = nodes.iter().filter(|node| node.x < 0.01).count();
+            assert!(attack_points <= 2, "attack points: {nodes:?}");
+            assert!((sample_editable_curve(&curve, 0.005) - 0.27).abs() < 0.03);
+            for index in 1..100 {
+                let phase = index as f32 / 100.0;
+                let fitted = sample_editable_curve(&curve, phase);
+                let source = envelope(phase);
+                assert!(
+                    (fitted - source).abs() < 0.03,
+                    "end gain {end_gain}, phase {phase}: {fitted} vs {source}, points {nodes:?}"
+                );
+            }
         }
     }
 

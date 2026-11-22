@@ -3485,12 +3485,11 @@ fn draw_compressor_preview(
             .iter()
             .map_while(|&gain| gain)
             .collect::<Vec<_>>();
-        let node = |index: usize| CurveNode {
-            x: (start + index) as f32,
-            y: gains[index],
-        };
         if gains.len() == 1 {
-            let point = position(node(0));
+            let point = position(CurveNode {
+                x: start as f32,
+                y: gains[0],
+            });
             path.move_to(gpui::point((point.x - px(0.5)).max(px(left)), point.y));
             path.line_to(gpui::point(
                 (point.x + px(0.5)).min(px(left + width - 1.0)),
@@ -3498,16 +3497,18 @@ fn draw_compressor_preview(
             ));
         } else if gains.len() >= 2 {
             let anchors = fit_compressor_bezier(&gains);
-            path.move_to(position(node(0)));
+            let node = |anchor: crate::compressor_capture::CompressorAnchor| CurveNode {
+                x: (start + anchor.sample) as f32,
+                y: anchor.gain,
+            };
+            path.move_to(position(node(anchors[0])));
             for (segment, pair) in anchors.windows(2).enumerate() {
-                let previous = segment
-                    .checked_sub(1)
-                    .map(|index| node(anchors[index].sample));
-                let next = anchors.get(segment + 2).map(|anchor| node(anchor.sample));
+                let previous = segment.checked_sub(1).map(|index| node(anchors[index]));
+                let next = anchors.get(segment + 2).copied().map(node);
                 let cubic = CubicBezier::between(
                     previous,
-                    node(pair[0].sample),
-                    node(pair[1].sample),
+                    node(pair[0]),
+                    node(pair[1]),
                     next,
                     pair[0].tension,
                 );
