@@ -1082,6 +1082,12 @@ mod macos {
 
         // Curve hit testing uses the same painted plot as the envelope.
         let origin = params.editable_curve_snapshot();
+        let slot = "curve-slot-0";
+        let amber = |pixel: &[u8]| pixel[0] > 218 && pixel[1] > 165 && pixel[2] < 140;
+        click_control(fixture, slot, COMMAND);
+        pump_appkit(app, &gui, 0.04);
+        assert_eq!(params.global_curve_slot_curve(0), Some(origin.clone()));
+        assert_eq!(count_region_pixels(&gui, slot, amber), 0);
         let node = origin.nodes[1];
         let [left, top, width, height] = pump::gui_gpui::screenshot_bounds("curve-plot");
         let x = f64::from(left + node.x * (width - 1.));
@@ -1091,15 +1097,25 @@ mod macos {
         send_mouse_dragged(fixture.window, x + 8., y - 12., 0);
         send_mouse_up(fixture.window, x + 8., y - 12., 0);
         assert_ne!(params.editable_curve_snapshot(), origin);
+        pump_appkit(app, &gui, 0.04);
+        assert!(count_region_pixels(&gui, slot, amber) > 80);
+        assert_eq!(count_region_pixels(&gui, "curve-slot-1", amber), 0);
+        assert_eq!(params.global_curve_slot_curve(0), Some(origin.clone()));
         send_key(app, fixture.window, &gui, "z", 6, COMMAND);
         assert_eq!(params.editable_curve_snapshot(), origin);
+        assert_eq!(count_region_pixels(&gui, slot, amber), 0);
         // Exercise the native paint path while retaining authored data in undo.
         let paint_x = f64::from(left + width * 0.65);
         let paint_y = f64::from(top + height * 0.5);
         send_secondary_mouse_down(fixture.window, paint_x, paint_y, 0);
         send_secondary_mouse_dragged(fixture.window, paint_x + 12., paint_y - 10., 0);
         send_secondary_mouse_up(fixture.window, paint_x + 12., paint_y - 10., 0);
-        assert_ne!(params.editable_curve_snapshot(), origin);
+        let painted = params.editable_curve_snapshot();
+        assert_ne!(painted, origin);
+        click_control(fixture, slot, COMMAND);
+        pump_appkit(app, &gui, 0.04);
+        assert_eq!(params.global_curve_slot_curve(0), Some(painted));
+        assert_eq!(count_region_pixels(&gui, slot, amber), 0);
         send_key(app, fixture.window, &gui, "z", 6, COMMAND);
         assert_eq!(params.editable_curve_snapshot(), origin);
         let before = params.active_sound();

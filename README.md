@@ -157,11 +157,10 @@ it as appropriate.
   current sync division unchanged.
 - Empty slots show a muted dash; clicking an empty slot is a non-destructive
   no-op.
-- `Cmd`-clicking a slot stores the current editable curve into that slot without
-  loading first.
-- A loaded slot turns red when the editor curve diverges from the stored slot
-  curve, and returns to normal when the curve matches again or a matching slot
-  is loaded/stored.
+- `Cmd`-click (`Ctrl`-click on Windows) saves the current editable curve into a
+  swatch without loading it first.
+- The active swatch turns amber when its curve has unsaved edits and returns
+  to coral when the curve matches the saved version.
 
 ## Timing behavior
 

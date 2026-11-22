@@ -80,6 +80,7 @@ const SIDECHAIN_WAVEFORM_COLOR: PumpColor = PumpColor::rgb(114, 189, 229);
 const CURVE_SEGMENT_MOVE_COLOR: PumpColor = PumpColor::rgb(96, 176, 255);
 const CURVE_OFFSET_MOVE_COLOR: PumpColor = PumpColor::rgb(255, 168, 88);
 const CURVE_OFFSET_HOVER_COLOR: PumpColor = CURVE_OFFSET_MOVE_COLOR.with_alpha(224);
+const CURVE_SLOT_MODIFIED_COLOR: PumpColor = PumpColor::rgb(242, 195, 109);
 const FILTER_OVERLAY_COLOR: PumpColor = PumpColor::rgb(255, 184, 84);
 const FILTER_OVERLAY_MUTED_COLOR: PumpColor = FILTER_OVERLAY_COLOR.with_alpha(112);
 const FILTER_HANDLE_HIT_RADIUS: f32 = 12.0;
@@ -5178,9 +5179,9 @@ fn icon_button(
     button(id, String::new(), active, width, focus_handle).child(icon)
 }
 
-struct PanelTooltip(&'static str);
+struct ControlTooltip(&'static str);
 
-impl Render for PanelTooltip {
+impl Render for ControlTooltip {
     fn render(&mut self, _: &mut Window, _: &mut Context<Self>) -> impl gpui::IntoElement {
         let theme = pump_theme();
         div()
@@ -5696,7 +5697,7 @@ impl PumpEditor {
         .h(px(FOOTER_HEIGHT))
         .flex_shrink_0()
         .aria_label(label)
-        .tooltip(move |_, cx| cx.new(|_| PanelTooltip(label)).into())
+        .tooltip(move |_, cx| cx.new(|_| ControlTooltip(label)).into())
         .child(icon)
         .on_click(
             cx.listener(move |view, event: &gpui::ClickEvent, window, cx| {
@@ -6259,11 +6260,11 @@ fn curve_slot_element(
     id: &'static str,
     curve: Option<crate::curve::EditableCurve>,
     loaded: bool,
-    deviated: bool,
+    modified: bool,
 ) -> gpui::Stateful<gpui::Div> {
     let theme = pump_theme();
-    let curve_color = if deviated {
-        theme.accent_danger
+    let curve_color = if modified {
+        CURVE_SLOT_MODIFIED_COLOR
     } else if loaded {
         theme.accent_copper
     } else {
@@ -6276,8 +6277,7 @@ fn curve_slot_element(
             let top = f32::from(bounds.top()) + 4.0;
             let width = (f32::from(bounds.size.width) - 10.0).max(1.0);
             let height = (f32::from(bounds.size.height) - 8.0).max(1.0);
-            let mut path =
-                gpui::PathBuilder::stroke(px(if loaded || deviated { 1.35 } else { 1.0 }));
+            let mut path = gpui::PathBuilder::stroke(px(if loaded { 1.35 } else { 1.0 }));
             if let Some(curve) = curve.as_ref() {
                 for index in 0..=24 {
                     let x = index as f32 / 24.0;
@@ -6299,10 +6299,21 @@ fn curve_slot_element(
         },
     )
     .size_full();
-    button(id, String::new(), loaded || deviated, 1.0, None)
+    button(id, String::new(), loaded, 1.0, None)
         .flex_1()
         .h(px(SLOT_HEIGHT))
         .rounded(px(2.0))
+        .when(modified, |slot| {
+            let help = if cfg!(target_os = "macos") {
+                "Unsaved curve. Cmd-click to save."
+            } else {
+                "Unsaved curve. Ctrl-click to save."
+            };
+            slot.bg(solid(CURVE_SLOT_MODIFIED_COLOR.with_alpha(48)))
+                .border_color(solid(CURVE_SLOT_MODIFIED_COLOR))
+                .aria_label(help)
+                .tooltip(move |_, cx| cx.new(|_| ControlTooltip(help)).into())
+        })
         .child(preview)
 }
 
@@ -6423,9 +6434,9 @@ impl Render for PumpEditor {
             .children((0..GLOBAL_CURVE_SLOT_COUNT).map(|index| {
                 let slot_curve = params.global_curve_slot_curve(index);
                 let loaded = loaded_slot == Some(index);
-                let deviated = loaded && params.current_curve_deviates_from_global_slot(index);
+                let modified = loaded && params.current_curve_deviates_from_global_slot(index);
                 let mut slot =
-                    curve_slot_element(CURVE_SLOT_IDS[index], slot_curve, loaded, deviated);
+                    curve_slot_element(CURVE_SLOT_IDS[index], slot_curve, loaded, modified);
                 slot = slot.on_click(cx.listener(move |view, event, window, cx| {
                     view.slot_click(index, event, window, cx)
                 }));
