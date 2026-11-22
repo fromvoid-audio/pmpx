@@ -5,6 +5,38 @@
 //! smoothing, and gain rules that the legacy editor exposed to hosts.
 
 use crate::curve::{sample_editable_curve, EditableCurve};
+use crate::incoming_waveform::CompressorPreviewSnapshot;
+
+#[derive(Default)]
+pub(crate) struct LiveCompressorPreview {
+    displayed: Option<CompressorPreviewSnapshot>,
+    last_frame_micros: u64,
+}
+
+impl LiveCompressorPreview {
+    /// Ease updates to existing phase bins without filling gaps in the signal.
+    pub(crate) fn update(
+        &mut self,
+        snapshot: Option<CompressorPreviewSnapshot>,
+        now_micros: u64,
+    ) -> Option<CompressorPreviewSnapshot> {
+        const SMOOTHING_MICROS: f32 = 60_000.0;
+        let elapsed = now_micros.saturating_sub(self.last_frame_micros) as f32;
+        self.last_frame_micros = now_micros;
+        self.displayed = snapshot.map(|mut next| {
+            if let Some(previous) = &self.displayed {
+                let retention = (-elapsed / SMOOTHING_MICROS).exp();
+                for (gain, &old) in next.iter_mut().zip(previous) {
+                    if let (Some(new), Some(old)) = (gain, old) {
+                        *new += (old - *new) * retention;
+                    }
+                }
+            }
+            next
+        });
+        self.displayed
+    }
+}
 
 /// Sample the authored curve at a viewport phase after applying the displayed
 /// phase offset.
@@ -91,6 +123,25 @@ mod tests {
     use crate::dsp::{DspSettings, PumpEngine};
     use crate::params::{DEFAULT_FREE_RATE_HZ, TIMING_MODE_SYNC};
     use toybox::dsp::TransportState;
+
+    #[test]
+    fn live_compressor_preview_eases_gain_changes_and_keeps_gaps_current() {
+        let mut preview = LiveCompressorPreview::default();
+        let mut snapshot = [None; crate::incoming_waveform::INCOMING_WAVEFORM_BIN_COUNT];
+        snapshot[..3].copy_from_slice(&[Some(0.2), Some(0.4), None]);
+        assert_eq!(preview.update(Some(snapshot), 1), Some(snapshot));
+
+        snapshot[..3].copy_from_slice(&[Some(0.8), None, Some(0.6)]);
+        let displayed = preview.update(Some(snapshot), 16_001).unwrap();
+        assert!((0.32..0.35).contains(&displayed[0].unwrap()));
+        assert_eq!(displayed[1..3], snapshot[1..3]);
+        let settled = preview.update(Some(snapshot), 360_001).unwrap();
+        assert!((settled[0].unwrap() - 0.8).abs() < 0.002);
+
+        assert!(preview.update(None, 376_001).is_none());
+        snapshot[0] = Some(0.1);
+        assert_eq!(preview.update(Some(snapshot), 392_001), Some(snapshot));
+    }
 
     fn curve() -> EditableCurve {
         EditableCurve {

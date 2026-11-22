@@ -39,6 +39,7 @@ use super::model::{
     FreeRateUnit, HostParamEditSink, KnobMessage, NumericEntryMessage, NumericEntryTarget,
     Point as ModelPoint, PumpEditorState, Vector2,
 };
+use super::projection::LiveCompressorPreview;
 use super::visual_system::{
     pump_meter_colors, pump_theme, PumpColor, PUMP_TYPOGRAPHY, PUMP_VISUAL_METRICS,
 };
@@ -1231,6 +1232,7 @@ struct PumpEditor {
     compressor_overlay_only: bool,
     filter_panel_open: bool,
     visible: Rc<Cell<bool>>,
+    compressor_preview: LiveCompressorPreview,
     spectrum: Option<SpectrumAnalyzer>,
     main_panel_width: Option<u32>,
     resize: ResizeRequester,
@@ -1421,6 +1423,7 @@ impl PumpEditor {
             compressor_overlay_only: false,
             filter_panel_open: false,
             visible,
+            compressor_preview: LiveCompressorPreview::default(),
             spectrum: None,
             main_panel_width: None,
             resize,
@@ -3711,7 +3714,6 @@ fn draw_compressor_preview(
     samples: &crate::incoming_waveform::CompressorPreviewSnapshot,
     window: &mut Window,
 ) {
-    use crate::compressor_capture::fit_compressor_bezier;
     use crate::curve::CubicBezier;
 
     let step = (width - 1.0).max(1.0) / (samples.len() - 1) as f32;
@@ -3721,48 +3723,36 @@ fn draw_compressor_preview(
             px(top + (1.0 - node.y) * (height - 1.0).max(1.0)),
         )
     };
+    let node = |index: usize| {
+        samples
+            .get(index)
+            .copied()
+            .flatten()
+            .map(|y| CurveNode { x: index as f32, y })
+    };
     let mut path = gpui::PathBuilder::stroke(px(2.0));
-    let mut start = 0;
-    while start < samples.len() {
-        let gains = samples[start..]
-            .iter()
-            .map_while(|&gain| gain)
-            .collect::<Vec<_>>();
-        if gains.len() == 1 {
-            let point = position(CurveNode {
-                x: start as f32,
-                y: gains[0],
-            });
+    // Only the adjacent segments and their tangents depend on a changed bin.
+    for index in 0..samples.len() {
+        let Some(start) = node(index) else { continue };
+        let previous = index.checked_sub(1).and_then(node);
+        if let Some(end) = node(index + 1) {
+            if previous.is_none() {
+                path.move_to(position(start));
+            }
+            let cubic = CubicBezier::between(previous, start, end, node(index + 2), 0.0);
+            path.cubic_bezier_to(
+                position(cubic.end),
+                position(cubic.control_a),
+                position(cubic.control_b),
+            );
+        } else if previous.is_none() {
+            let point = position(start);
             path.move_to(gpui::point((point.x - px(0.5)).max(px(left)), point.y));
             path.line_to(gpui::point(
                 (point.x + px(0.5)).min(px(left + width - 1.0)),
                 point.y,
             ));
-        } else if gains.len() >= 2 {
-            let anchors = fit_compressor_bezier(&gains);
-            let node = |anchor: crate::compressor_capture::CompressorAnchor| CurveNode {
-                x: (start + anchor.sample) as f32,
-                y: anchor.gain,
-            };
-            path.move_to(position(node(anchors[0])));
-            for (segment, pair) in anchors.windows(2).enumerate() {
-                let previous = segment.checked_sub(1).map(|index| node(anchors[index]));
-                let next = anchors.get(segment + 2).copied().map(node);
-                let cubic = CubicBezier::between(
-                    previous,
-                    node(pair[0]),
-                    node(pair[1]),
-                    next,
-                    pair[0].tension,
-                );
-                path.cubic_bezier_to(
-                    position(cubic.end),
-                    position(cubic.control_a),
-                    position(cubic.control_b),
-                );
-            }
         }
-        start += gains.len() + 1;
     }
     if let Ok(path) = path.build() {
         window.paint_path(path, solid(pump_theme().accent_copper));
@@ -3867,6 +3857,7 @@ fn sampled_curve_segment_polylines(
 fn draw_curve(
     bounds: Bounds<Pixels>,
     state: &PumpEditorState,
+    compressor_preview: Option<&crate::incoming_waveform::CompressorPreviewSnapshot>,
     last_pointer: Option<Point<Pixels>>,
     window: &mut Window,
     cx: &mut App,
@@ -4048,10 +4039,8 @@ fn draw_curve(
             window.paint_path(path, solid(curve_color));
         });
     }
-    if compressor_enabled && !state.params().bypassed() && compressor[16] < 0.5 {
-        if let Some(gain) = state.status().compressor_preview_snapshot() {
-            draw_compressor_preview(left, top, width, height, &gain, window);
-        }
+    if let Some(gain) = compressor_preview {
+        draw_compressor_preview(left, top, width, height, gain, window);
     }
     let move_segment = state
         .active_segment()
@@ -6311,13 +6300,14 @@ impl Render for PumpEditor {
         }
         self.pump_tick(window, cx);
         let state = self.state.borrow();
+        let now = crate::time_utils::monotonic_micros();
         let input = state.status().track_spectrum();
         let show_spectrum = self.filter_panel_open && self.visible.get();
         input.set_enabled(show_spectrum);
         let spectrum = if show_spectrum {
             self.spectrum
                 .get_or_insert_with(SpectrumAnalyzer::default)
-                .update(input, crate::time_utils::monotonic_micros())
+                .update(input, now)
         } else {
             None
         };
@@ -6325,6 +6315,13 @@ impl Render for PumpEditor {
         let params = state.params();
         let active_sound = params.active_sound();
         let bypassed = params.bypassed();
+        let compressor = params.compressor();
+        let preview = if compressor[0] >= 0.5 && !bypassed && compressor[16] < 0.5 {
+            state.status().compressor_preview_snapshot()
+        } else {
+            None
+        };
+        let compressor_preview = self.compressor_preview.update(preview, now);
 
         let timing_free = params.timing_mode() == TIMING_MODE_FREE;
         let curve_bounds = Rc::clone(&self.curve_bounds);
@@ -6336,7 +6333,14 @@ impl Render for PumpEditor {
                 *curve_bounds.borrow_mut() = Some(bounds);
             },
             move |bounds, _, window, cx| {
-                draw_curve(bounds, &draw_state.borrow(), last_pointer, window, cx);
+                draw_curve(
+                    bounds,
+                    &draw_state.borrow(),
+                    compressor_preview.as_ref(),
+                    last_pointer,
+                    window,
+                    cx,
+                );
                 let down_editor_entity = editor_entity.clone();
                 window.on_mouse_event(move |_: &MouseDownEvent, phase, _window, cx| {
                     if phase == DispatchPhase::Capture {

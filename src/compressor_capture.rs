@@ -352,23 +352,16 @@ const SLOW_ENVELOPE_ERROR: f32 = 0.015;
 const CLIPPED_START_PHASE: f32 = 0.000001;
 
 #[derive(Clone, Copy)]
-pub(crate) struct CompressorAnchor {
-    pub(crate) sample: usize,
-    pub(crate) gain: f32,
-    pub(crate) tension: f32,
+struct CompressorAnchor {
+    sample: usize,
+    gain: f32,
+    tension: f32,
 }
 
 #[derive(Clone, Copy, PartialEq, Eq)]
 enum FitBoundary {
-    Open,
     Joined,
     Clipped,
-}
-
-/// Fit the main gain movement within a small editing budget. Adjust the
-/// existing Bézier handles before spending another anchor.
-pub(crate) fn fit_compressor_bezier(points: &[f32]) -> Vec<CompressorAnchor> {
-    fit_bezier(points, FitBoundary::Open)
 }
 
 fn fit_bezier(points: &[f32], boundary: FitBoundary) -> Vec<CompressorAnchor> {
@@ -435,14 +428,10 @@ fn fit_bezier_segment(
         node
     };
     // Use the same neighbors at the cycle cut as the saved Bézier curve.
-    // The live trace is open because its first and last bins may be incomplete.
     let previous = segment
         .checked_sub(1)
         .map(|index| node(anchors[index]))
-        .or_else(|| {
-            if boundary == FitBoundary::Open {
-                return None;
-            }
+        .unwrap_or_else(|| {
             let index = anchors.len()
                 - if boundary == FitBoundary::Clipped {
                     1
@@ -451,24 +440,25 @@ fn fit_bezier_segment(
                 };
             let mut previous = node(anchors[index]);
             previous.x -= cycle;
-            Some(previous)
+            previous
         });
-    let next = anchors.get(segment + 2).copied().map(node).or_else(|| {
-        if boundary == FitBoundary::Open {
-            return None;
-        }
-        let index = usize::from(boundary == FitBoundary::Joined);
-        let mut next = node(anchors[index]);
-        next.x += cycle;
-        Some(next)
-    });
+    let next = anchors
+        .get(segment + 2)
+        .copied()
+        .map(node)
+        .unwrap_or_else(|| {
+            let index = usize::from(boundary == FitBoundary::Joined);
+            let mut next = node(anchors[index]);
+            next.x += cycle;
+            next
+        });
     let left = node(anchors[segment]);
     let right = node(anchors[segment + 1]);
     let cubic_at = |tension| {
         if wide {
-            CubicBezier::with_wide_handles(previous, left, right, next, tension)
+            CubicBezier::with_wide_handles(Some(previous), left, right, Some(next), tension)
         } else {
-            CubicBezier::between(previous, left, right, next, tension)
+            CubicBezier::between(Some(previous), left, right, Some(next), tension)
         }
     };
     let start = anchors[segment].sample;
