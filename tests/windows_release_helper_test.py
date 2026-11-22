@@ -71,7 +71,7 @@ def cargo_lock() -> str:
 [[package]]
 name = "toybox"
 version = "0.1.0"
-source = "git+https://github.com/PORTALSURFER/toybox.git?rev={TOYBOX_REVISION}#{TOYBOX_REVISION}"
+source = "git+https://github.com/fromvoid-audio/toybox.git?rev={TOYBOX_REVISION}#{TOYBOX_REVISION}"
 
 [[package]]
 name = "gpui"
@@ -96,7 +96,7 @@ class WindowsReleaseHelperTests(unittest.TestCase):
                 windows_release_helper.load_dependency_revisions(lockfile)
 
     def package(self, root: Path, *, binary_data: bytes | None = None, output_name: str = "release") -> tuple[dict, Path, Path]:
-        binary = root / "dist" / "Pump-v0.1.0.vst3" / "Contents" / "x86_64-win" / "Pump-v0.1.0.vst3"
+        binary = root / "dist" / "pmpx-v0.1.0.vst3" / "Contents" / "x86_64-win" / "pmpx-v0.1.0.vst3"
         binary.parent.mkdir(parents=True, exist_ok=True)
         binary.write_bytes(binary_data or pe_image())
         lockfile = root / "Cargo.lock"
@@ -136,8 +136,8 @@ class WindowsReleaseHelperTests(unittest.TestCase):
             self.assertEqual(
                 manifest["archive"]["layout"],
                 {
-                    "bundle": "Pump-v0.1.0.vst3",
-                    "binary": "Pump-v0.1.0.vst3/Contents/x86_64-win/Pump-v0.1.0.vst3",
+                    "bundle": "pmpx-v0.1.0.vst3",
+                    "binary": "pmpx-v0.1.0.vst3/Contents/x86_64-win/pmpx-v0.1.0.vst3",
                 },
             )
             with zipfile.ZipFile(archive_path) as archive:

@@ -25,7 +25,7 @@ SOURCE_SHA = "b" * 40
 BRANCH_SHA = "c" * 40
 MERGED_SHA = "d" * 40
 DRIFT_SHA = "e" * 40
-REPOSITORY = "PORTALSURFER/pump"
+REPOSITORY = "fromvoid-audio/pmpx"
 
 
 def release_history(
@@ -928,11 +928,11 @@ class LocalVersionBranchTests(unittest.TestCase):
         # version.  The coordinator must continue to exercise a 0.2.6 -> 0.2.7
         # bump after the product itself advances.
         (self.seed / "Cargo.toml").write_text(
-            '[package]\nname = "pump"\nversion = "0.2.6"\nedition = "2021"\n',
+            '[package]\nname = "pmpx"\nversion = "0.2.6"\nedition = "2021"\n',
             encoding="utf-8",
         )
         (self.seed / "Cargo.lock").write_text(
-            'version = 4\n\n[[package]]\nname = "pump"\nversion = "0.2.6"\n',
+            'version = 4\n\n[[package]]\nname = "pmpx"\nversion = "0.2.6"\n',
             encoding="utf-8",
         )
         shutil.copy2(source / "scripts" / "bump_version.py", self.seed / "scripts" / "bump_version.py")

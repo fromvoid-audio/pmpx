@@ -7,7 +7,7 @@ mod macos {
     use cocoa::foundation::{NSAutoreleasePool, NSDefaultRunLoopMode, NSPoint, NSRect, NSSize};
     use objc::runtime::{Object, BOOL, NO, YES};
     use objc::{class, msg_send, sel, sel_impl};
-    use pump::gui_gpui::{new_screenshot_gui_with_params, WINDOW_HEIGHT, WINDOW_WIDTH};
+    use pmpx::gui_gpui::{new_screenshot_gui_with_params, WINDOW_HEIGHT, WINDOW_WIDTH};
     use raw_window_handle::{AppKitWindowHandle, RawWindowHandle};
     use std::ffi::{c_void, CStr, CString, OsString};
     use std::path::PathBuf;
@@ -341,7 +341,7 @@ mod macos {
         color_matches: impl Fn(&[u8]) -> bool,
     ) -> usize {
         let (width, height, pixels) = capture_pixels(gui, region);
-        let [left, top, plot_width, plot_height] = pump::gui_gpui::screenshot_bounds(region);
+        let [left, top, plot_width, plot_height] = pmpx::gui_gpui::screenshot_bounds(region);
         let scale = height as f32 / OUTPUT_HEIGHT as f32;
         let left_px = (left * scale).ceil() as usize;
         let right_px = ((left + plot_width) * scale).floor() as usize;
@@ -608,13 +608,13 @@ mod macos {
     }
 
     fn center(key: &str) -> (f64, f64) {
-        let [x, y, w, h] = pump::gui_gpui::screenshot_bounds(key);
+        let [x, y, w, h] = pmpx::gui_gpui::screenshot_bounds(key);
         (f64::from(x + w * 0.5), f64::from(y + h * 0.5))
     }
 
     unsafe fn wait_for_control(app: id, gui: &toybox::gpui_gui::GpuiHostedGui, key: &str) {
         let deadline = Instant::now() + Duration::from_secs(3);
-        while pump::gui_gpui::screenshot_bounds_if_painted(key).is_none() {
+        while pmpx::gui_gpui::screenshot_bounds_if_painted(key).is_none() {
             assert!(Instant::now() < deadline, "control {key} must paint");
             pump_appkit(app, gui, 0.01);
         }
@@ -662,7 +662,7 @@ mod macos {
         let _: () = msg_send![fixture.window, makeFirstResponder: std::ptr::null_mut::<Object>()];
         pump_appkit(app, &gui, 0.1);
         capture_frame(&gui, "opened instrument editor");
-        let [_, plot_top, _, _] = pump::gui_gpui::screenshot_bounds("curve-plot");
+        let [_, plot_top, _, _] = pmpx::gui_gpui::screenshot_bounds("curve-plot");
         assert!(
             plot_top < 55.0,
             "the plot should start directly below the header"
@@ -692,7 +692,7 @@ mod macos {
         assert_eq!(count_plot_pixels(&gui, pale_blue), 0);
         params.set_editable_curve(&original_curve);
 
-        let transport = pump::GuiTransportTelemetry {
+        let transport = pmpx::GuiTransportTelemetry {
             is_playing: false,
             transport_is_playing: true,
             has_host_beats_timeline: false,
@@ -708,7 +708,7 @@ mod macos {
         status.publish_gain_reduction(0.25, true);
         pump_appkit(app, &gui, 0.06);
         let (width, height, pixels) = capture_pixels(&gui, "gain reduction meter");
-        let [x, y, w, h] = pump::gui_gpui::screenshot_bounds("gain-reduction-meter");
+        let [x, y, w, h] = pmpx::gui_gpui::screenshot_bounds("gain-reduction-meter");
         let meter_x = ((x + w * 0.5) * width as f32 / OUTPUT_WIDTH as f32) as usize;
         let meter_pixel_at = |fraction| {
             let row = ((y + h * fraction) * height as f32 / OUTPUT_HEIGHT as f32) as usize;
@@ -725,7 +725,7 @@ mod macos {
         status.mark_gain_reduction_inactive();
         status.update_transport(
             0.0,
-            pump::GuiTransportTelemetry {
+            pmpx::GuiTransportTelemetry {
                 transport_is_playing: false,
                 ..transport
             },
@@ -742,7 +742,7 @@ mod macos {
             "value-Smooth",
             "value-Swing",
         ] {
-            let [x, y, w, h] = pump::gui_gpui::screenshot_bounds(key);
+            let [x, y, w, h] = pmpx::gui_gpui::screenshot_bounds(key);
             assert!(
                 x >= 0.
                     && y >= 0.
@@ -789,7 +789,7 @@ mod macos {
         // Smooth and Swing now admit horizontal slider drags, including outside
         // the window, instead of the old vertical knob gesture.
         for key in ["Smooth", "Swing"] {
-            let [x, y, w, h] = pump::gui_gpui::screenshot_bounds(&format!("slider-{key}"));
+            let [x, y, w, h] = pmpx::gui_gpui::screenshot_bounds(&format!("slider-{key}"));
             let y = f64::from(y + h * 0.5);
             let start = f64::from(x + 5. + (w - 10.) * 0.25);
             let end = f64::from(x + 5. + (w - 10.) * 0.75);
@@ -818,7 +818,7 @@ mod macos {
                 "{key} must retain native numeric entry"
             );
         }
-        let [x, y, _, h] = pump::gui_gpui::screenshot_bounds("slider-Smooth");
+        let [x, y, _, h] = pmpx::gui_gpui::screenshot_bounds("slider-Smooth");
         let y = f64::from(y + h * 0.5);
         send_mouse_down(fixture.window, f64::from(x + 10.), y, 0);
         send_mouse_dragged(fixture.window, 650., 180., 0);
@@ -837,16 +837,16 @@ mod macos {
 
         assert!(center("compressor-panel").0 < center("waveform-mode").0);
         assert!(center("filter-panel").0 > center("bypass").0);
-        assert!(pump::gui_gpui::screenshot_bounds_if_painted("compressor-capture").is_none());
-        let base_plot = pump::gui_gpui::screenshot_bounds("curve-plot");
+        assert!(pmpx::gui_gpui::screenshot_bounds_if_painted("compressor-capture").is_none());
+        let base_plot = pmpx::gui_gpui::screenshot_bounds("curve-plot");
         assert_eq!(params.effects()[0], 0.0);
         click_control(fixture, "filter-panel", 0);
         pump_appkit(app, &gui, 0.06);
         assert_eq!(params.effects()[0], 1.0);
         assert_eq!(params.compressor()[0], 0.0);
         fixture.sync_host_size(OUTPUT_WIDTH + PANEL_WIDTH);
-        assert_eq!(pump::gui_gpui::screenshot_bounds("curve-plot"), base_plot);
-        let [frequency_x, _, _, _] = pump::gui_gpui::screenshot_bounds("frequency-plot");
+        assert_eq!(pmpx::gui_gpui::screenshot_bounds("curve-plot"), base_plot);
+        let [frequency_x, _, _, _] = pmpx::gui_gpui::screenshot_bounds("frequency-plot");
         assert!(frequency_x >= OUTPUT_WIDTH as f32);
 
         let spectrum_ink = |pixel: &[u8]| {
@@ -855,7 +855,7 @@ mod macos {
             (68..150).contains(&red) && red.abs_diff(green) <= 12 && red.abs_diff(blue) <= 12
         };
         let before = count_region_pixels(&gui, "frequency-plot", spectrum_ink);
-        pump::gui_gpui::seed_screenshot_track_spectrum(&status);
+        pmpx::gui_gpui::seed_screenshot_track_spectrum(&status);
         pump_appkit(app, &gui, 0.04);
         let after = count_region_pixels(&gui, "frequency-plot", spectrum_ink);
         assert!(
@@ -876,7 +876,7 @@ mod macos {
             params.set_effect(index, 1.);
             pump_appkit(app, &gui, 0.04);
             let curve = params.editable_curve_snapshot();
-            let [x, y, w, h] = pump::gui_gpui::screenshot_bounds(&format!("band-{index}"));
+            let [x, y, w, h] = pmpx::gui_gpui::screenshot_bounds(&format!("band-{index}"));
             let y = f64::from(y + h * 0.5);
             let start = f64::from(x + w - 5.);
             let end = f64::from(x + 5. + (w - 10.) * 0.25);
@@ -910,10 +910,10 @@ mod macos {
         params.set_effect(1, 200.0);
         pump_appkit(app, &gui, 0.04);
         let [marker_x, marker_y, marker_width, marker_height] =
-            pump::gui_gpui::screenshot_bounds("crossover-marker");
+            pmpx::gui_gpui::screenshot_bounds("crossover-marker");
         let x = f64::from(marker_x + marker_width * 0.5 + 4.0);
         let y = f64::from(marker_y + marker_height * 0.25);
-        let [_, _, plot_width, _] = pump::gui_gpui::screenshot_bounds("frequency-plot");
+        let [_, _, plot_width, _] = pmpx::gui_gpui::screenshot_bounds("frequency-plot");
         let bright_gray =
             |pixel: &[u8]| pixel[0] > 180 && pixel[0] == pixel[1] && pixel[1] == pixel[2];
         let idle = count_region_pixels(&gui, "frequency-plot", bright_gray);
@@ -946,7 +946,7 @@ mod macos {
         assert_eq!(params.compressor()[0], 1.0);
         assert_eq!(params.effects()[0], 1.0);
         fixture.sync_host_size(OUTPUT_WIDTH + 2 * PANEL_WIDTH);
-        let [x, y, w, h] = pump::gui_gpui::screenshot_bounds("curve-plot");
+        let [x, y, w, h] = pmpx::gui_gpui::screenshot_bounds("curve-plot");
         assert!((x - (base_plot[0] + PANEL_WIDTH as f32)).abs() < 0.01);
         assert_eq!([y, w, h], base_plot[1..]);
         click_control(fixture, "filter-panel", 0);
@@ -955,14 +955,14 @@ mod macos {
         assert_eq!(params.compressor()[0], 1.0);
         fixture.sync_host_size(OUTPUT_WIDTH + PANEL_WIDTH);
         assert_eq!(
-            pump::gui_gpui::screenshot_bounds("curve-plot"),
+            pmpx::gui_gpui::screenshot_bounds("curve-plot"),
             [x, y, w, h]
         );
-        assert!(pump::gui_gpui::screenshot_bounds_if_painted("compressor-16").is_none());
+        assert!(pmpx::gui_gpui::screenshot_bounds_if_painted("compressor-16").is_none());
         for index in (0..20).filter(|&index| index != 16) {
             let key = format!("compressor-{index}");
             wait_for_control(app, &gui, &key);
-            let [x, y, w, h] = pump::gui_gpui::screenshot_bounds(&key);
+            let [x, y, w, h] = pmpx::gui_gpui::screenshot_bounds(&key);
             assert!(
                 x >= 0.
                     && y >= 0.
@@ -974,8 +974,8 @@ mod macos {
             );
         }
         let [release_x, release_y, release_w, release_h] =
-            pump::gui_gpui::screenshot_bounds("compressor-3");
-        let [auto_x, auto_y, auto_w, _] = pump::gui_gpui::screenshot_bounds("compressor-17");
+            pmpx::gui_gpui::screenshot_bounds("compressor-3");
+        let [auto_x, auto_y, auto_w, _] = pmpx::gui_gpui::screenshot_bounds("compressor-17");
         assert!(((auto_x + auto_w * 0.5) - (release_x + release_w * 0.5)).abs() < 1.);
         assert!((0.0..=4.0).contains(&(auto_y - (release_y + release_h))));
         click_control(fixture, "compressor-17", 0);
@@ -991,7 +991,7 @@ mod macos {
         pump_appkit(app, &gui, 0.04);
         let coral_before = count_plot_pixels(&gui, coral);
         let blue_before = count_plot_pixels(&gui, blue);
-        pump::gui_gpui::seed_screenshot_waveform(&status, &params);
+        pmpx::gui_gpui::seed_screenshot_waveform(&status, &params);
         pump_appkit(app, &gui, 0.04);
         assert!(
             count_plot_pixels(&gui, coral) > coral_before + 40,
@@ -1026,14 +1026,14 @@ mod macos {
         assert!((params.compressor()[19] - 30.0).abs() < 0.01);
         params.set_delay_beats(0.0);
         let previous_curve = params.editable_curve_snapshot();
-        let [x, _, w, _] = pump::gui_gpui::screenshot_bounds("compressor-capture");
+        let [x, _, w, _] = pmpx::gui_gpui::screenshot_bounds("compressor-capture");
         assert!(
             x + w <= PANEL_WIDTH as f32,
             "Capture belongs in the compressor drawer"
         );
         click_control(fixture, "compressor-capture", 0);
         pump_appkit(app, &gui, 0.04);
-        assert!(pump::gui_gpui::complete_screenshot_compressor_capture(
+        assert!(pmpx::gui_gpui::complete_screenshot_compressor_capture(
             status.as_ref(),
             0.5
         ));
@@ -1059,7 +1059,7 @@ mod macos {
         assert_eq!(params.compressor()[0], 0.0);
 
         fixture.sync_host_size(OUTPUT_WIDTH);
-        assert_eq!(pump::gui_gpui::screenshot_bounds("curve-plot"), base_plot);
+        assert_eq!(pmpx::gui_gpui::screenshot_bounds("curve-plot"), base_plot);
 
         // Mix/Output are retained knobs with independent editable values.
         type_value(app, fixture, &gui, "value-Mix", "62");
@@ -1089,7 +1089,7 @@ mod macos {
         assert_eq!(params.global_curve_slot_curve(0), Some(origin.clone()));
         assert_eq!(count_region_pixels(&gui, slot, amber), 0);
         let node = origin.nodes[1];
-        let [left, top, width, height] = pump::gui_gpui::screenshot_bounds("curve-plot");
+        let [left, top, width, height] = pmpx::gui_gpui::screenshot_bounds("curve-plot");
         let x = f64::from(left + node.x * (width - 1.));
         let y = f64::from(top + (1. - node.y) * (height - 1.));
         send_mouse_move_with_modifiers(fixture.window, x, y, 0);
@@ -1199,7 +1199,7 @@ mod macos {
         })
         .to_com_ptr::<IPlugFrame>()
         .expect("VST3 host frame");
-        let view = ComPtr::from_raw(pump::new_screenshot_vst3_editor()).expect("VST3 editor");
+        let view = ComPtr::from_raw(pmpx::new_screenshot_vst3_editor()).expect("VST3 editor");
         assert_eq!(view.setFrame(frame.as_ptr()), kResultOk);
         assert_eq!(
             view.attached(fixture.view.cast(), kPlatformTypeNSView),
@@ -1208,7 +1208,7 @@ mod macos {
         pump_appkit_events(app, 0.08, || {});
 
         let plot_on_screen = || {
-            let [x, y, w, h] = pump::gui_gpui::screenshot_bounds("curve-plot");
+            let [x, y, w, h] = pmpx::gui_gpui::screenshot_bounds("curve-plot");
             let window_point = NSRect::new(
                 NSPoint::new(f64::from(x), f64::from(OUTPUT_HEIGHT) - f64::from(y)),
                 NSSize::new(0.0, 0.0),
@@ -1254,12 +1254,12 @@ mod macos {
         click_control(&fixture, "filter-panel", 0);
         pump_appkit_events(app, 0.08, || {});
         assert_anchored(edge, OUTPUT_WIDTH + PANEL_WIDTH);
-        let [filter_x, _, _, _] = pump::gui_gpui::screenshot_bounds("frequency-plot");
+        let [filter_x, _, _, _] = pmpx::gui_gpui::screenshot_bounds("frequency-plot");
         assert!(filter_x >= OUTPUT_WIDTH as f32);
         click_control(&fixture, "filter-panel", 0);
         pump_appkit_events(app, 0.08, || {});
         assert_anchored(edge, OUTPUT_WIDTH);
-        let [_, capture_y, _, capture_h] = pump::gui_gpui::screenshot_bounds("compressor-capture");
+        let [_, capture_y, _, capture_h] = pmpx::gui_gpui::screenshot_bounds("compressor-capture");
         assert!(capture_y + capture_h < center("compressor-panel").1 as f32);
         click_control(&fixture, "compressor-panel", 0);
         pump_appkit_events(app, 0.08, || {});
@@ -1283,7 +1283,7 @@ mod macos {
         click_control(&fixture, "filter-panel", 0);
         pump_appkit_events(app, 0.08, || {});
         assert_anchored(original, OUTPUT_WIDTH);
-        let [filter_x, _, _, _] = pump::gui_gpui::screenshot_bounds("frequency-plot");
+        let [filter_x, _, _, _] = pmpx::gui_gpui::screenshot_bounds("frequency-plot");
         assert!(filter_x > 0.0 && filter_x < OUTPUT_WIDTH as f32);
         click_control(&fixture, "filter-panel", 0);
         pump_appkit_events(app, 0.08, || {});

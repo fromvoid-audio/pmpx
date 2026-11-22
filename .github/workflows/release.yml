@@ -1,4 +1,4 @@
-name: Pump release
+name: pmpx release
 
 on:
   workflow_dispatch:
@@ -280,7 +280,7 @@ jobs:
               or manifest.get("build_id") != build_id
               or manifest.get("released_at") != released_at
               or not isinstance(source, dict)
-              or source.get("repository") != "PORTALSURFER/pump"
+              or source.get("repository") != "fromvoid-audio/pmpx"
               or source.get("git_sha") != source_sha
               or source.get("dirty") is not False
               or manifest.get("signing_status") != "unsigned"
@@ -335,7 +335,7 @@ jobs:
           test -f "${publisher_script}" && test ! -L "${publisher_script}"
           echo "path=${publisher_script}" >> "$GITHUB_OUTPUT"
 
-      - name: Produce and optionally publish Pump release
+      - name: Produce and optionally publish pmpx release
         env:
           PORTALSURFER_RELEASE_TOKEN: ${{ inputs.publish && secrets.PORTALSURFER_RELEASE_TOKEN || '' }}
           APPLE_DEVELOPER_ID_APPLICATION_CERT_BASE64: ${{ secrets.APPLE_DEVELOPER_ID_APPLICATION_CERT_BASE64 }}

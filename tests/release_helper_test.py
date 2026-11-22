@@ -181,7 +181,7 @@ class ReleaseHelperTests(unittest.TestCase):
                     "channel": "nightly",
                     "released_at": "2026-07-29T18:30:00Z",
                     "source": {
-                        "repository": "PORTALSURFER/pump",
+                        "repository": "fromvoid-audio/pmpx",
                         "git_sha": sha_a,
                     },
                 },
@@ -214,7 +214,7 @@ class ReleaseHelperTests(unittest.TestCase):
                     "channel": "nightly",
                     "version": "0.2.6-nightly.73",
                     "released_at": "2026-09-09T08:55:04Z",
-                    "source": {"repository": "PORTALSURFER/pump", "git_sha": source},
+                    "source": {"repository": "fromvoid-audio/pmpx", "git_sha": source},
                 }
             ]
         }
@@ -238,7 +238,7 @@ class ReleaseHelperTests(unittest.TestCase):
                     "channel": "nightly",
                     "version": "0.2.6-nightly.73",
                     "released_at": "2026-09-09T08:55:04Z",
-                    "source": {"repository": "PORTALSURFER/pump", "git_sha": source},
+                    "source": {"repository": "fromvoid-audio/pmpx", "git_sha": source},
                 }
             ]
         }
@@ -263,7 +263,7 @@ class ReleaseHelperTests(unittest.TestCase):
                     "channel": "nightly",
                     "version": "0.2.6-nightly.73",
                     "released_at": "2026-09-09T08:55:04Z",
-                    "source": {"repository": "PORTALSURFER/pump", "git_sha": source},
+                    "source": {"repository": "fromvoid-audio/pmpx", "git_sha": source},
                 }
             ]
         }
@@ -291,7 +291,7 @@ class ReleaseHelperTests(unittest.TestCase):
                     "version": publication,
                     "build_id": build_id,
                     "released_at": "2026-09-09T08:55:04Z",
-                    "source": {"repository": "PORTALSURFER/pump", "git_sha": source},
+                    "source": {"repository": "fromvoid-audio/pmpx", "git_sha": source},
                 }
             ]
         }
@@ -510,7 +510,7 @@ class ReleaseHelperTests(unittest.TestCase):
         self.assertIn("runs-on: windows-2022", windows)
         self.assertIn("workflow_call:", windows)
         self.assertIn("RUST_TARGET: x86_64-pc-windows-msvc", windows)
-        self.assertIn("dist/Pump-v${PACKAGE_VERSION}.vst3/Contents/x86_64-win/Pump-v${PACKAGE_VERSION}.vst3", windows)
+        self.assertIn("dist/pmpx-v${PACKAGE_VERSION}.vst3/Contents/x86_64-win/pmpx-v${PACKAGE_VERSION}.vst3", windows)
         self.assertIn("pump-v${PUBLICATION_VERSION}-windows-x86_64-unsigned.vst3.zip", windows)
         self.assertIn("windows-artifact-manifest.json", windows)
         self.assertIn("permissions:\n  contents: read", windows)
@@ -529,7 +529,7 @@ class ReleaseHelperTests(unittest.TestCase):
         )
         self.assertIn("python3 scripts/nightly_coordinator.py", workflow)
         self.assertIn("github.ref == 'refs/heads/main'", workflow)
-        self.assertIn("github.repository == 'PORTALSURFER/pump'", workflow)
+        self.assertIn("github.repository == 'fromvoid-audio/pmpx'", workflow)
         self.assertIn("permissions: {}", workflow)
         self.assertNotIn("secrets.", workflow)
         self.assertNotIn("PORTALSURFER_RELEASE_TOKEN", workflow)

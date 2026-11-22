@@ -9,7 +9,7 @@ from pathlib import Path
 
 CORE_SEMVER = re.compile(r"([0-9]+)\.([0-9]+)\.([0-9]+)\Z")
 PACKAGE_VERSION = re.compile(r'(?m)^(version\s*=\s*")[^"]+("\s*)$')
-LOCK_PACKAGE = re.compile(r'(?ms)(^\[\[package\]\]\nname = "pump"\nversion = ")[^"]+("\n)')
+LOCK_PACKAGE = re.compile(r'(?ms)(^\[\[package\]\]\nname = "pmpx"\nversion = ")[^"]+("\n)')
 
 
 def _parse_version(version: str) -> tuple[int, int, int]:

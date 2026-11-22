@@ -28,7 +28,7 @@ use crate::params::{
     encode_state_payload, get_param_value, param_count, plain_value_from_clap_value, text_to_value,
     value_to_text, write_param_info, PumpParams,
 };
-use crate::plugin_metadata::{PLUGIN_ID, PLUGIN_NAME, VENDOR_NAME};
+use crate::plugin_metadata::{PLUGIN_ID, PLUGIN_NAME, VENDOR_NAME, VENDOR_URL};
 use crate::sample_automation::{
     dsp_settings_from_params, process_stereo_block, ParamEventSchedule,
 };
@@ -161,6 +161,7 @@ impl DefaultPluginFactory for PumpPlugin {
 
         PluginDescriptor::new(PLUGIN_ID, PLUGIN_NAME)
             .with_vendor(VENDOR_NAME)
+            .with_url(VENDOR_URL)
             .with_features([AUDIO_EFFECT, STEREO])
             .with_description("Node-based beat-synced gain ducking effect")
     }

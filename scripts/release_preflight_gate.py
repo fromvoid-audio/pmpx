@@ -15,7 +15,7 @@ from urllib.request import Request, urlopen
 
 
 WORKFLOW_FILE = ".github/workflows/release-preflight.yml"
-WORKFLOW_NAME = "Pump release preflight"
+WORKFLOW_NAME = "pmpx release preflight"
 BRANCH = "main"
 EVENTS = ("push", "workflow_dispatch")
 JOB_NAME = "publisher_integration"

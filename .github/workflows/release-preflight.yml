@@ -1,4 +1,4 @@
-name: Pump release preflight
+name: pmpx release preflight
 
 on:
   pull_request:

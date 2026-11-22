@@ -1,9 +1,11 @@
 # Nightly releases
 
-Use the `Pump nightly scheduler` workflow (`nightly.yml`) to prepare and publish a new nightly:
+The hosted release pipeline requires the configured GitHub environments, branch protections, signing credentials, and publisher access. Use the local preflight command in the README for development bundles.
+
+Use the `pmpx nightly scheduler` workflow (`nightly.yml`) to prepare and publish a new nightly:
 
 ```bash
-gh workflow run nightly.yml --repo PORTALSURFER/pump --ref main
+gh workflow run nightly.yml --repo fromvoid-audio/pmpx --ref main
 ```
 
 A scheduled run skips a source commit already published as a nightly. Use `-f force=true` to request a new nightly even without source changes.
@@ -14,7 +16,7 @@ Each new nightly advances the package patch version in both `Cargo.toml` and `Ca
 
 The coordinator creates or reuses a version-only PR, explicitly dispatches CI and release preflight for its exact head, and merges only after the checks pass. It then explicitly dispatches the protected preflight on merged `main` and waits for success before requesting the production release. If `main` moves during validation, the run stops instead of publishing a different commit.
 
-Explicit dispatch is necessary because changes made with `GITHUB_TOKEN` do not trigger the usual push workflows. The repository allows Actions to create PRs, while its default workflow token remains read-only. Only the nightly coordinator receives repository contents, pull-request, and Actions write permissions. Branch protection is retained.
+Explicit dispatch is necessary because changes made with `GITHUB_TOKEN` do not trigger the usual push workflows. The production repository setup must allow Actions to create PRs and keep its default workflow token read-only. Only the nightly coordinator receives repository contents, pull-request, and Actions write permissions. Enable branch protection for the release branch.
 
 GitHub may hold workflows created for the bot's version PR for maintainer approval. Explicit branch dispatches provide exact-head validation but do not approve those PR workflows or satisfy the protected merge gate by themselves. Approve the bot-created PR workflows in Actions when requested; the coordinator waits for that gate and never approves it automatically.
 

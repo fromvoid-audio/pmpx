@@ -1,4 +1,4 @@
-name: Pump Windows release
+name: pmpx Windows release
 
 on:
   workflow_dispatch:
@@ -182,8 +182,8 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          source_binary="dist/Pump-v${PACKAGE_VERSION}.vst3/Contents/x86_64-win/Pump-v${PACKAGE_VERSION}.vst3"
-          rm -rf -- "dist/Pump-v${PACKAGE_VERSION}.vst3"
+          source_binary="dist/pmpx-v${PACKAGE_VERSION}.vst3/Contents/x86_64-win/pmpx-v${PACKAGE_VERSION}.vst3"
+          rm -rf -- "dist/pmpx-v${PACKAGE_VERSION}.vst3"
           cargo build --locked --release --target x86_64-pc-windows-msvc --features vst3
           test -f "${source_binary}"
 
@@ -207,7 +207,7 @@ jobs:
         run: |
           set -euo pipefail
           output_dir="dist/releases/${BUILD_ID}"
-          source_binary="dist/Pump-v${PACKAGE_VERSION}.vst3/Contents/x86_64-win/Pump-v${PACKAGE_VERSION}.vst3"
+          source_binary="dist/pmpx-v${PACKAGE_VERSION}.vst3/Contents/x86_64-win/pmpx-v${PACKAGE_VERSION}.vst3"
           python scripts/windows_release_helper.py package \
             --binary "${source_binary}" \
             --output-dir "${output_dir}" \

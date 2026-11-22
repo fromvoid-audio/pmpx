@@ -1,4 +1,4 @@
-name: Pump nightly scheduler
+name: pmpx nightly scheduler
 
 on:
   schedule:
@@ -20,7 +20,7 @@ concurrency:
 
 jobs:
   coordinate:
-    if: github.repository == 'PORTALSURFER/pump' && github.ref == 'refs/heads/main'
+    if: github.repository == 'fromvoid-audio/pmpx' && github.ref == 'refs/heads/main'
     runs-on: ubuntu-latest
     timeout-minutes: 180
     permissions:

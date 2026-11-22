@@ -31,8 +31,8 @@ for manifest in ${manifests}; do
   fi
 
   if grep -nE '^toybox[[:space:]]*=[[:space:]]*[{][^}]*git[[:space:]]*=' "${manifest}" \
-    | grep -vqE 'git[[:space:]]*=[[:space:]]*\"https://github.com/PORTALSURFER/toybox[.]git\"'; then
-    fail "toybox git URL must be https://github.com/PORTALSURFER/toybox.git in ${manifest} (normalize .git suffix so local [patch] works consistently)"
+    | grep -vqE 'git[[:space:]]*=[[:space:]]*\"https://github.com/fromvoid-audio/toybox[.]git\"'; then
+    fail "toybox git URL must be https://github.com/fromvoid-audio/toybox.git in ${manifest} (normalize .git suffix so local [patch] works consistently)"
   fi
 
   if grep -nE 'branch[[:space:]]*=' "${manifest}"; then

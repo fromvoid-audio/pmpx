@@ -23,7 +23,7 @@ fn main() {
     let version =
         env::var("CARGO_PKG_VERSION").expect("CARGO_PKG_VERSION not set by cargo for build script");
     let profile = env::var("PROFILE").unwrap_or_else(|_| "debug".into());
-    let paths = windows_bundle_paths(WindowsBundleFormat::Vst3, "Pump", &version);
+    let paths = windows_bundle_paths(WindowsBundleFormat::Vst3, "pmpx", &version);
     let output_path = paths.output_path(profile == "release");
 
     if let Some(parent) = output_path.parent() {
@@ -39,7 +39,7 @@ fn main() {
         windows_rustc_link_arg(output_path)
     );
     println!(
-        "cargo:warning=writing Pump VST3 artifact to {}",
+        "cargo:warning=writing pmpx VST3 artifact to {}",
         output_path.display()
     );
 }

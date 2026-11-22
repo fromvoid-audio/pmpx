@@ -9,7 +9,7 @@ mod macos {
     use image::{imageops, ImageFormat, RgbaImage};
     use objc::runtime::{Object, YES};
     use objc::{class, msg_send, sel, sel_impl};
-    use pump::gui_gpui::{new_screenshot_gui_with_params, WINDOW_HEIGHT, WINDOW_WIDTH};
+    use pmpx::gui_gpui::{new_screenshot_gui_with_params, WINDOW_HEIGHT, WINDOW_WIDTH};
     use raw_window_handle::{AppKitWindowHandle, RawWindowHandle};
     use std::path::{Path, PathBuf};
     use std::ptr::NonNull;
@@ -174,13 +174,13 @@ mod macos {
     }
 
     fn center(key: &str) -> (f64, f64) {
-        let [x, y, w, h] = pump::gui_gpui::screenshot_bounds(key);
+        let [x, y, w, h] = pmpx::gui_gpui::screenshot_bounds(key);
         (f64::from(x + w * 0.5), f64::from(y + h * 0.5))
     }
 
     fn numeric_label_pixels(capture: &(u32, u32, Vec<u8>), key: &str) -> Vec<u8> {
         let (width, height, pixels) = capture;
-        let [x, y, w, h] = pump::gui_gpui::screenshot_bounds(key);
+        let [x, y, w, h] = pmpx::gui_gpui::screenshot_bounds(key);
         let x0 = (x * *width as f32 / 640.).floor().max(0.) as u32;
         let x1 = ((x + w) * *width as f32 / 640.).ceil().min(*width as f32) as u32;
         let y0 = (y * *height as f32 / 400.).floor().max(0.) as u32;
@@ -384,7 +384,7 @@ mod macos {
             pump_appkit(app, &gui, 0.06);
             let expanded_width = fixture.sync_host_size();
             assert_eq!(expanded_width, 1120);
-            pump::gui_gpui::seed_screenshot_track_spectrum(&status);
+            pmpx::gui_gpui::seed_screenshot_track_spectrum(&status);
             capture(
                 app,
                 &fixture,
@@ -454,10 +454,10 @@ mod macos {
             );
             params.set_phase_offset(phase_before_seam);
 
-            let (node_x, node_y) = pump::gui_gpui::screenshot_curve_point(&params, 0.08);
-            let (segment_x, segment_y) = pump::gui_gpui::screenshot_curve_point(&params, 0.22);
-            let (before_x, before_y) = pump::gui_gpui::screenshot_curve_point(&params, 0.219);
-            let (after_x, after_y) = pump::gui_gpui::screenshot_curve_point(&params, 0.221);
+            let (node_x, node_y) = pmpx::gui_gpui::screenshot_curve_point(&params, 0.08);
+            let (segment_x, segment_y) = pmpx::gui_gpui::screenshot_curve_point(&params, 0.22);
+            let (before_x, before_y) = pmpx::gui_gpui::screenshot_curve_point(&params, 0.219);
+            let (after_x, after_y) = pmpx::gui_gpui::screenshot_curve_point(&params, 0.221);
             let tangent_x = after_x - before_x;
             let tangent_y = after_y - before_y;
             let tangent_length = tangent_x.hypot(tangent_y);
@@ -916,7 +916,7 @@ mod macos {
             params.set_swing(0.4);
             params.set_output_gain_db(-3.0);
             status.publish_gain_reduction(0.5, true);
-            pump::gui_gpui::seed_screenshot_waveform(&status, &params);
+            pmpx::gui_gpui::seed_screenshot_waveform(&status, &params);
             capture(
                 app,
                 &fixture,

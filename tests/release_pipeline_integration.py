@@ -87,7 +87,7 @@ def _require_exact_entries(root: Path, names: set[str], label: str) -> None:
 def _require_shared_source(manifest: dict[str, Any], source_sha: str, label: str) -> None:
     source = manifest.get("source")
     require(isinstance(source, dict), f"{label} source metadata is invalid")
-    require(source.get("repository") == "PORTALSURFER/pump", f"{label} repository is invalid")
+    require(source.get("repository") == "fromvoid-audio/pmpx", f"{label} repository is invalid")
     require(source.get("git_sha") == source_sha, f"{label} source SHA does not match prepare")
     require(source.get("dirty") is False, f"{label} source is not clean")
 

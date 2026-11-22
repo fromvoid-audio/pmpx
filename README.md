@@ -1,10 +1,10 @@
-# pump
+# pmpx
 
-`pump` is a node-based beat-synced gain-shaper plugin.
+pmpx is a node-based, beat-synced gain shaper with sidechain compression and editable envelope capture. It was previously called Pump. The CLAP ID, VST3 class IDs, and saved state and preset formats carry forward from Pump.
 
 ## Build
 
-Pump builds as a CLAP-first plugin by default. VST3 support is available behind
+pmpx builds as a CLAP-first plugin by default. VST3 support is available behind
 the `vst3` cargo feature and requires a local VST3 SDK checkout.
 
 CLAP-only (default):
@@ -17,28 +17,26 @@ cargo test
 VST3 (requires SDK):
 
 ```bash
-VST3_SDK_DIR=/mnt/e/lib/vst3sdk cargo build --features vst3
-VST3_SDK_DIR=/mnt/e/lib/vst3sdk cargo test --features vst3
+VST3_SDK_DIR=/path/to/vst3sdk bash scripts/ci_local.sh --vst3
 ```
 
 ## Local VST3 testing
 
-Build the host-installable bundle for local testing with the audiodev producer
-(this is separate from the signed/notarized production release workflow below):
+Build ad-hoc signed macOS CLAP and VST3 bundles for local testing from a clean
+checkout.
 
 ```bash
-bash /Users/portalsurfer/dev/audiodev/scripts/build-vst3-release.sh pump
+VST3_SDK_DIR=/path/to/vst3sdk bash scripts/release.sh --preflight
 ```
 
-When run from `/Users/portalsurfer/dev/audiodev`, the equivalent command is
-`bash scripts/build-vst3-release.sh pump`. The resulting bundle is
-`/Users/portalsurfer/dev/audiodev/dist/pump-v<version>-macos.vst3`. Do not copy
-`pump/target/release/*.vst3`: Cargo refreshes the binary but not that bundle.
-Restart the DAW or fully unload the previous plugin before testing a replacement.
+Extract `pmpx.vst3` from the VST3 ZIP in `dist/releases/` and install it in
+`~/Library/Audio/Plug-Ins/VST3/`. The release service retains the `pump` product
+key and ZIP naming. Keep one copy installed per plugin format and restart the DAW
+before testing a replacement.
 
 ## Production releases
 
-The same producer is used locally and by the manual `Pump release` Actions
+The same producer is used locally and by the manual `pmpx release` Actions
 workflow. Stable and RC releases remain macOS-only schema 2. On a clean macOS
 arm64 checkout, with `VST3_SDK_DIR` set to the pinned Steinberg SDK and the
 Apple Developer ID/notarization credentials configured, run:
@@ -117,9 +115,9 @@ disables it when closing the panel. The panel has a vertical
 threshold control, a gain-reduction meter and knobs for ratio, attack, release,
 range, makeup and dry/wet. The detector can use the main input, the host's
 external stereo sidechain, or a blend of the two, with dedicated gain and filter
-controls. Route the external signal to Pump's sidechain input in your DAW. The
+controls. Route the external signal to pmpx's sidechain input in your DAW. The
 compressor also offers automatic release, soft clipping and a lightweight 2×
-oversampling option. This is Pump's own compressor, not a model of Ableton's
+oversampling option. This is pmpx's own compressor, not a model of Ableton's
 Glue Compressor.
 
 The compressor’s Smooth knob adds up to 100 ms of smoothing to its gain
@@ -133,13 +131,13 @@ mode and can be shown with the compressor off.
 While compression is active, the coral gain curve updates live in the plot.
 To freeze it, choose Sync with Delay at zero, turn bypass off, start host
 playback, then press `CAPTURE` in the compressor panel. If Sidechain Listen is
-active in an existing project, turn it off via the host parameter first. Pump
+active in an existing project, turn it off via the host parameter first. pmpx
 waits for the next cycle boundary and records one full cycle. It turns
 compression off and replaces the drawn curve
 with an editable Bézier envelope. The fitter tries the smallest curves first
 and uses wider handles to shape the attack and release. Complex changes can
 use up to 12 editable points.
-Capture accounts for Pump's Mix and adjusts Depth, Floor, Smooth, Mix and, when needed for makeup
+Capture accounts for pmpx's Mix and adjusts Depth, Floor, Smooth, Mix and, when needed for makeup
 gain, Output Gain. Undo restores the previous settings and curve. Capture
 needs a host beat timeline.
 If band processing is enabled, reduce makeup until the captured gain does not
@@ -151,7 +149,7 @@ it as appropriate.
 
 - The row between the curve editor and knobs provides 8 globally persisted curve
   slots with micro previews of stored curves.
-- The slot bank is shared by every Pump instance and survives host/plugin
+- The slot bank is shared by every pmpx instance and survives host/plugin
   relaunches independently of project state, presets, and individual instances.
 - Clicking a slot loads only that slot's curve into the editor and keeps the
   current sync division unchanged.
@@ -164,7 +162,7 @@ it as appropriate.
 
 ## Timing behavior
 
-Pump has two timing sources:
+pmpx has two timing sources:
 
 - **Sync** follows the host beat timeline and the selected Sync division (for
   example, 1/4 or 1/8). A nonzero Delay extends each period by holding phase
@@ -202,7 +200,7 @@ host-automatable Swing mapping.
 
 ## Dual-band processing
 
-Pump includes a one-crossover, 12/24 dB Linkwitz–Riley dual-band mode. See [controls, compatibility and validation](docs/dual-band.md). Both bands share the authored envelope.
+pmpx includes a one-crossover, 12/24 dB Linkwitz–Riley dual-band mode. See [controls, compatibility and validation](docs/dual-band.md). Both bands share the authored envelope.
 
 Smooth and Swing use horizontal sliders without handles; Mix and Output retain their rotary knobs.
 

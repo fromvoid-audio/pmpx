@@ -6767,7 +6767,7 @@ impl Render for PumpEditor {
                             .text_color(solid(theme.border_emphasis))
                             .child("/"),
                     )
-                    .child(div().text_color(solid(theme.accent_copper)).child("PUMP")),
+                    .child(div().text_color(solid(theme.accent_copper)).child("PMPX")),
             )
             .children(storage_warning);
         let header = div()

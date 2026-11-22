@@ -27,7 +27,7 @@ from release_helper import canonical_json, file_digest, validate_publication_ver
 
 MANIFEST_SCHEMA = 1
 PRODUCT = "pump"
-REPOSITORY = "PORTALSURFER/pump"
+REPOSITORY = "fromvoid-audio/pmpx"
 FORMAT = "vst3"
 PLATFORM = "windows"
 ARCHITECTURE = "x86_64"
@@ -36,7 +36,7 @@ SIGNING_CERTIFICATE = None
 VST3_SDK_REPOSITORY = "https://github.com/steinbergmedia/vst3sdk.git"
 VST3_SDK_REVISION = "58f8da7936800732561402d7936584ca4505de07"
 DEPENDENCY_REPOSITORIES = {
-    "toybox": "https://github.com/PORTALSURFER/toybox.git",
+    "toybox": "https://github.com/fromvoid-audio/toybox.git",
     "gpui": "https://github.com/PORTALSURFER/gpui-embedded.git",
     "gpui_wgpu": "https://github.com/PORTALSURFER/gpui-embedded.git",
     "vst3sdk": VST3_SDK_REPOSITORY,
@@ -124,7 +124,7 @@ def _validate_build_environment(build_environment: Mapping[str, Any]) -> dict[st
 
 
 def bundle_name(package_version: str) -> str:
-    return f"Pump-v{package_version}.vst3"
+    return f"pmpx-v{package_version}.vst3"
 
 
 def archive_name(publication_version: str) -> str:

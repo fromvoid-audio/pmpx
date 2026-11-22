@@ -30,7 +30,8 @@ MANIFEST_CONTENT_TYPES = {
 MANIFEST_CONTENT_TYPE = MANIFEST_CONTENT_TYPES[MANIFEST_SCHEMA_V2]
 PRODUCTION_ORIGIN = "https://portalsurfer.org"
 PRODUCT = "pump"
-REPOSITORY = "PORTALSURFER/pump"
+REPOSITORY = "fromvoid-audio/pmpx"
+LEGACY_REPOSITORY = "PORTALSURFER/pump"
 SAFE_NAME = re.compile(r"[A-Za-z0-9][A-Za-z0-9._-]*\Z")
 SAFE_BUILD_ID = re.compile(r"[a-z0-9][a-z0-9._-]{1,127}\Z")
 SHA256 = re.compile(r"[0-9a-f]{64}\Z")
@@ -166,7 +167,7 @@ def latest_release_source_sha(document: Any, *, channel: str) -> Optional[str]:
         if parsed.tzinfo is None or parsed.utcoffset() is None:
             raise ValueError("matching release released_at must include a timezone")
         source = release.get("source")
-        if not isinstance(source, dict) or source.get("repository") != REPOSITORY:
+        if not isinstance(source, dict) or source.get("repository") not in (REPOSITORY, LEGACY_REPOSITORY):
             raise ValueError("matching release source repository is invalid")
         source_sha = source.get("git_sha")
         if not isinstance(source_sha, str) or not GIT_SHA.fullmatch(source_sha):
@@ -1177,15 +1178,16 @@ def _audit_zip(path: Path, format_name: str, expected_team: str, *, cwd: Path, r
     with tempfile.TemporaryDirectory(prefix="pump-release-audit-") as temporary:
         extracted = Path(temporary)
         _run_checked(("/usr/bin/ditto", "-x", "-k", str(path), str(extracted)), cwd=cwd)
-        bundle = extracted / f"pump.{format_name}"
+        bundle = extracted / f"pmpx.{format_name}"
         contents = bundle / "Contents"
+        binary = contents / "MacOS" / "pmpx"
         required = {
             bundle,
             contents,
             contents / "Info.plist",
             contents / "PkgInfo",
             contents / "MacOS",
-            contents / "MacOS" / "pump",
+            binary,
         }
         allowed = required | {
             contents / "CodeResources",
@@ -1205,10 +1207,9 @@ def _audit_zip(path: Path, format_name: str, expected_team: str, *, cwd: Path, r
                 _assert_no_symlinks(child)
                 if child not in allowed:
                     raise ValueError(f"{format_name} ZIP contains unexpected topology: {child.relative_to(extracted)}")
-        if not all(path.exists() for path in required) or not (contents / "MacOS" / "pump").is_file() or not os.access(contents / "MacOS" / "pump", os.X_OK):
+        if not all(path.exists() for path in required) or not binary.is_file() or not os.access(binary, os.X_OK):
             raise ValueError(f"{format_name} ZIP bundle layout is invalid")
         info = contents / "Info.plist"
-        binary = contents / "MacOS" / "pump"
         _run_checked(("/usr/bin/plutil", "-lint", str(info)), cwd=cwd)
         identifier = _run_checked(("/usr/bin/plutil", "-extract", "CFBundleIdentifier", "raw", "-o", "-", str(info)), cwd=cwd, capture_output=True).stdout.strip()
         if identifier != f"com.portalsurfer.pump.{format_name}":

@@ -226,7 +226,7 @@ if (
     or manifest.get("released_at") != released_at
     or not isinstance(source, dict)
     or source.get("git_sha") != source_sha
-    or source.get("repository") != "PORTALSURFER/pump"
+    or source.get("repository") != "fromvoid-audio/pmpx"
     or source.get("dirty") is not False
     or manifest.get("signing_status") != "unsigned"
     or manifest.get("signing_certificate") is not None
@@ -331,18 +331,18 @@ PY
 
 build_bundle() {
   local format="$1" archive="$2" binary="$3"
-  local bundle="${tmp_root}/pump.${format}"
+  local bundle="${tmp_root}/pmpx.${format}"
   local contents="${bundle}/Contents"
   mkdir -p "${contents}/MacOS"
-  cp "${binary}" "${contents}/MacOS/pump"
-  chmod 755 "${contents}/MacOS/pump"
+  cp "${binary}" "${contents}/MacOS/pmpx"
+  chmod 755 "${contents}/MacOS/pmpx"
   cat > "${contents}/Info.plist" <<EOF
 <?xml version="1.0" encoding="UTF-8"?>
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
 <plist version="1.0"><dict>
-<key>CFBundleExecutable</key><string>pump</string>
+<key>CFBundleExecutable</key><string>pmpx</string>
 <key>CFBundleIdentifier</key><string>com.portalsurfer.pump.${format}</string>
-<key>CFBundleName</key><string>Pump</string>
+<key>CFBundleName</key><string>pmpx</string>
 <key>CFBundlePackageType</key><string>BNDL</string>
 <key>CFBundleShortVersionString</key><string>${package_version}</string>
 <key>CFBundleVersion</key><string>${package_version}</string>
@@ -395,15 +395,15 @@ PY
     [[ "${team_id}" =~ ^[A-Z0-9]{10}$ ]] || { echo "could not capture Developer ID team identifier" >&2; exit 1; }
     if [[ -z "${signing_team_id}" ]]; then signing_team_id="${team_id}"; elif [[ "${signing_team_id}" != "${team_id}" ]]; then echo "bundle signing team identifiers differ" >&2; exit 1; fi
   fi
-  file "${contents}/MacOS/pump" | grep -q 'arm64' || { echo "${format} binary is not arm64" >&2; exit 1; }
+  file "${contents}/MacOS/pmpx" | grep -q 'arm64' || { echo "${format} binary is not arm64" >&2; exit 1; }
   if command -v lipo >/dev/null 2>&1; then
-    [[ "$(lipo -archs "${contents}/MacOS/pump")" == arm64 ]] || { echo "${format} binary must contain only arm64" >&2; exit 1; }
+    [[ "$(lipo -archs "${contents}/MacOS/pmpx")" == arm64 ]] || { echo "${format} binary must contain only arm64" >&2; exit 1; }
   fi
   if [[ "${format}" == clap ]]; then
-    /usr/bin/nm -gU "${contents}/MacOS/pump" | grep -q '_clap_entry' || { echo "CLAP entrypoint missing" >&2; exit 1; }
+    /usr/bin/nm -gU "${contents}/MacOS/pmpx" | grep -q '_clap_entry' || { echo "CLAP entrypoint missing" >&2; exit 1; }
   else
     for symbol in _GetPluginFactory _bundleEntry _bundleExit; do
-      /usr/bin/nm -gU "${contents}/MacOS/pump" | grep -q "${symbol}" || { echo "VST3 symbol ${symbol} missing" >&2; exit 1; }
+      /usr/bin/nm -gU "${contents}/MacOS/pmpx" | grep -q "${symbol}" || { echo "VST3 symbol ${symbol} missing" >&2; exit 1; }
     done
   fi
   /usr/bin/ditto -c -k --sequesterRsrc --keepParent "${bundle}" "${archive}"
@@ -418,7 +418,7 @@ release_target="${tmp_root}/cargo-target"
 
 echo "[release] building CLAP"
 CARGO_TARGET_DIR="${release_target}" cargo build --locked --release
-clap_binary="${release_target}/release/libpump.dylib"
+clap_binary="${release_target}/release/libpmpx.dylib"
 [[ -f "${clap_binary}" ]] || { echo "missing CLAP build output: ${clap_binary}" >&2; exit 1; }
 clap_archive="${release_dir}/pump-v${artifact_version}-macos.clap.zip"
 build_bundle clap "${clap_archive}" "${clap_binary}"
@@ -426,7 +426,7 @@ audit_zip clap "${clap_archive}" "${signing_team_id}"
 
 echo "[release] building VST3"
 VST3_SDK_DIR="${VST3_SDK_DIR}" CARGO_TARGET_DIR="${release_target}" cargo rustc --locked --release --features vst3 --lib -- -C link-arg=-Wl,-bundle
-vst3_binary="${release_target}/release/libpump.dylib"
+vst3_binary="${release_target}/release/libpmpx.dylib"
 [[ -f "${vst3_binary}" ]] || { echo "missing VST3 build output: ${vst3_binary}" >&2; exit 1; }
 vst3_archive="${release_dir}/pump-v${artifact_version}-macos.vst3.zip"
 build_bundle vst3 "${vst3_archive}" "${vst3_binary}"

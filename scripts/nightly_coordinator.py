@@ -73,8 +73,8 @@ def _load_toml(text: str) -> dict[str, Any]:
     return {"package": packages}
 
 
-PRODUCT = "pump"
-REPOSITORY = "PORTALSURFER/pump"
+CARGO_PACKAGE = "pmpx"
+REPOSITORY = "fromvoid-audio/pmpx"
 BASE_BRANCH = "main"
 VERSION_BRANCH = "codex/nightly-version-bump"
 VERSION_PR_MARKER = "<!-- portalsurfer-nightly-version-bump -->"
@@ -529,7 +529,7 @@ class GitRepository:
             matches = [
                 package
                 for package in packages
-                if isinstance(package, dict) and package.get("name") == PRODUCT
+                if isinstance(package, dict) and package.get("name") == CARGO_PACKAGE
             ]
             if len(matches) != 1 or not isinstance(matches[0].get("version"), str):
                 raise ValueError

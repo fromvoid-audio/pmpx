@@ -20,7 +20,7 @@ WORKFLOW_ID = 17
 def workflow() -> dict:
     return {
         "id": WORKFLOW_ID,
-        "name": "Pump release preflight",
+        "name": "pmpx release preflight",
         "path": ".github/workflows/release-preflight.yml",
         "state": "active",
     }
@@ -34,7 +34,7 @@ def run(run_id: int, run_number: int, *, conclusion: str = "success") -> dict:
         "run_attempt": 1,
         "created_at": "2026-09-04T10:00:00Z",
         "updated_at": f"2026-09-04T10:{run_number:02d}:00Z",
-        "name": "Pump release preflight",
+        "name": "pmpx release preflight",
         "path": ".github/workflows/release-preflight.yml",
         "head_sha": SOURCE_SHA,
         "head_branch": "main",
@@ -54,7 +54,7 @@ def jobs(run_id: int, *, conclusion: str = "success") -> dict:
                 "run_attempt": 1,
                 "head_sha": SOURCE_SHA,
                 "head_branch": "main",
-                "workflow_name": "Pump release preflight",
+                "workflow_name": "pmpx release preflight",
                 "name": "publisher_integration",
                 "status": "completed",
                 "conclusion": conclusion,

@@ -7,12 +7,11 @@
 /// Stable CLAP plugin identifier (reverse-DNS lowercase).
 pub(crate) const PLUGIN_ID: &str = "com.portalsurfer.pump";
 /// Human-facing plugin display name.
-pub(crate) const PLUGIN_NAME: &str = "pump";
+pub(crate) const PLUGIN_NAME: &str = "pmpx";
 /// Human-facing vendor display name.
 pub(crate) const VENDOR_NAME: &str = "PORTALSURFER";
-/// Vendor/project homepage used in VST3 factory metadata.
-#[cfg(feature = "vst3")]
-pub(crate) const VENDOR_URL: &str = "https://github.com/uhx/pump";
+/// Project homepage reported to the host.
+pub(crate) const VENDOR_URL: &str = "https://github.com/fromvoid-audio/pmpx";
 /// Vendor support contact used in VST3 factory metadata.
 #[cfg(feature = "vst3")]
 pub(crate) const VENDOR_EMAIL: &str = "support@localhost";
@@ -23,13 +22,14 @@ mod tests {
 
     #[test]
     fn plugin_id_stays_reverse_dns_lowercase() {
+        assert_eq!(PLUGIN_ID, "com.portalsurfer.pump");
         assert_eq!(PLUGIN_ID, PLUGIN_ID.to_ascii_lowercase());
         assert!(PLUGIN_ID.split('.').count() >= 3);
     }
 
     #[test]
     fn plugin_name_remains_host_facing_identity() {
-        assert_eq!(PLUGIN_NAME, "pump");
+        assert_eq!(PLUGIN_NAME, "pmpx");
     }
 
     #[test]
