@@ -23,6 +23,7 @@ use unicode_segmentation::UnicodeSegmentation;
 
 use crate::automation_queue::PumpAutomationQueue;
 use crate::curve::{sample_editable_curve, CurveNode};
+use crate::dual_band::CROSSOVER_INDEX;
 use crate::params::{
     format_plain_value_text, normalized_from_plain_value, sync_division_label, PumpParams,
     SoundSide, GLOBAL_CURVE_SLOT_COUNT, MAX_FILTER_FREQ_HZ, MAX_FILTER_Q, MIN_FILTER_FREQ_HZ,
@@ -78,6 +79,7 @@ const CURVE_OFFSET_HOVER_COLOR: PumpColor = CURVE_OFFSET_MOVE_COLOR.with_alpha(2
 const FILTER_OVERLAY_COLOR: PumpColor = PumpColor::rgb(255, 184, 84);
 const FILTER_OVERLAY_MUTED_COLOR: PumpColor = FILTER_OVERLAY_COLOR.with_alpha(112);
 const FILTER_HANDLE_HIT_RADIUS: f32 = 12.0;
+const CROSSOVER_HIT_RADIUS: f32 = 6.0;
 const FILTER_HANDLE_RADIUS: f32 = 5.1;
 const FILTER_RESPONSE_DB_MIN: f32 = -48.0;
 const FILTER_RESPONSE_DB_MAX: f32 = 6.0;
@@ -119,8 +121,25 @@ const COMPRESSOR_CONTROL_IDS: [&str; crate::compressor_controls::COUNT] = [
     "compressor-18",
 ];
 const COMPRESSOR_SHORT_LABELS: [&str; crate::compressor_controls::COUNT] = [
-    "COMP", "THR", "ATT", "REL", "RATIO", "RANGE", "MAKE", "MIX", "CLIP", "EXT", "SC GAIN",
-    "SC MIX", "SC EQ", "FILTER", "FREQ", "Q", "LISTEN", "AUTO", "OS",
+    "ENABLE",
+    "THRESHOLD",
+    "ATTACK",
+    "RELEASE",
+    "RATIO",
+    "RANGE",
+    "MAKEUP",
+    "MIX",
+    "CLIP",
+    "EXT",
+    "GAIN",
+    "MIX",
+    "EQ",
+    "FILTER",
+    "FREQ",
+    "Q",
+    "LISTEN",
+    "AUTO",
+    "2×",
 ];
 
 const TIMING_FREE_RATE_IDS: [&str; 4] = [
@@ -1094,6 +1113,8 @@ struct PumpEditor {
     curve_dragging_marquee: bool,
     curve_dragging_paint: bool,
     filter_drag_handle: Option<FilterHandle>,
+    crossover_drag: Option<CrossoverDrag>,
+    crossover_hovered: bool,
     pending_option_gesture: Option<PendingOptionGesture>,
     pending_empty_node: Option<(Point<Pixels>, CurveNode)>,
     pending_seam: Option<(Point<Pixels>, bool)>,
@@ -1103,9 +1124,17 @@ struct PumpEditor {
     active_compressor_drag: Option<(usize, f32, f32)>,
     compressor_panel_open: bool,
     compressor_hover: Option<usize>,
+    capture_hovered: bool,
     last_pointer: Option<Point<Pixels>>,
     button_focus_handles: HashMap<&'static str, FocusHandle>,
     button_activation_keys: HashSet<String>,
+}
+
+struct CrossoverDrag {
+    start_x: Pixels,
+    start_fraction: f32,
+    width: Pixels,
+    started: bool,
 }
 
 #[derive(Clone, Copy)]
@@ -1258,6 +1287,8 @@ impl PumpEditor {
             curve_dragging_marquee: false,
             curve_dragging_paint: false,
             filter_drag_handle: None,
+            crossover_drag: None,
+            crossover_hovered: false,
             pending_option_gesture: None,
             pending_empty_node: None,
             pending_seam: None,
@@ -1267,6 +1298,7 @@ impl PumpEditor {
             active_compressor_drag: None,
             compressor_panel_open: false,
             compressor_hover: None,
+            capture_hovered: false,
             last_pointer: None,
             button_focus_handles,
             button_activation_keys: HashSet::new(),
@@ -1433,6 +1465,7 @@ impl PumpEditor {
         self.curve_dragging_marquee = false;
         self.curve_dragging_paint = false;
         self.filter_drag_handle = None;
+        self.crossover_drag = None;
         self.pending_option_gesture = None;
         self.pending_empty_node = None;
         self.pending_seam = None;
@@ -1581,6 +1614,62 @@ impl PumpEditor {
             .map(|(handle, _)| handle)
     }
 
+    fn hit_crossover(&self, position: Point<Pixels>) -> Option<CrossoverDrag> {
+        let effects = self.state.borrow().params().effects();
+        if effects[0] < 0.5 && self.state.borrow().filter_enabled() {
+            return None;
+        }
+        let (left, top, width, height) = self.filter_plot_geometry()?;
+        let plot = crossover_plot(left, top, width, height);
+        let fraction = crossover_fraction(effects[CROSSOVER_INDEX]);
+        let marker = plot.left() + plot.size.width * fraction;
+        if (position.x - marker).abs() > px(CROSSOVER_HIT_RADIUS)
+            || position.y < plot.top()
+            || position.y > plot.bottom()
+            || self.node_at(position).is_some()
+            || self.seam_at(position).is_some()
+        {
+            return None;
+        }
+        Some(CrossoverDrag {
+            start_x: position.x,
+            start_fraction: fraction,
+            width: plot.size.width,
+            started: false,
+        })
+    }
+
+    fn update_crossover_drag(&mut self, x: Pixels, cx: &mut Context<Self>) {
+        let Some(drag) = &mut self.crossover_drag else {
+            return;
+        };
+        let delta = x - drag.start_x;
+        if !drag.started && delta.abs() < px(1.0) {
+            return;
+        }
+        let value = crossover_frequency(drag.start_fraction + delta / drag.width);
+        if self.state.borrow().params().effects()[CROSSOVER_INDEX] == value {
+            return;
+        }
+        if !drag.started {
+            drag.started = true;
+            self.dispatch(
+                EditorMessage::EffectGesture {
+                    index: CROSSOVER_INDEX,
+                    message: KnobMessage::GestureStarted,
+                },
+                cx,
+            );
+        }
+        self.dispatch(
+            EditorMessage::EffectGesture {
+                index: CROSSOVER_INDEX,
+                message: KnobMessage::ValueChanged { value },
+            },
+            cx,
+        );
+    }
+
     fn filter_values_at_pointer(&self, position: Point<Pixels>) -> Option<(f32, f32)> {
         Some((
             self.filter_frequency_from_x(f32::from(position.x))?,
@@ -1680,6 +1769,17 @@ impl PumpEditor {
                 cx,
             );
         }
+        if !event.modifiers.modified() && self.hit_crossover(event.position).is_some() {
+            if !self.crossover_hovered {
+                self.clear_curve_hover(cx);
+                self.crossover_hovered = true;
+                cx.notify();
+            }
+            return;
+        }
+        if std::mem::take(&mut self.crossover_hovered) {
+            cx.notify();
+        }
         let filter_handle = self.hit_filter_handle(event.position);
         if filter_handle != self.state.borrow().hover_filter_handle() {
             self.dispatch(
@@ -1740,6 +1840,9 @@ impl PumpEditor {
                 || state.hover_segment().is_some()
                 || state.hover_filter_handle().is_some()
         };
+        if std::mem::take(&mut self.crossover_hovered) {
+            cx.notify();
+        }
         if should_clear {
             self.dispatch(
                 EditorMessage::Curve(CurvePreviewMessage::Hover {
@@ -1998,6 +2101,15 @@ impl PumpEditor {
                 );
                 return;
             }
+            if !event.modifiers.modified() {
+                if let Some(drag) = self.hit_crossover(event.position) {
+                    self.clear_curve_hover(cx);
+                    self.curve_active_button = Some(MouseButton::Left);
+                    self.crossover_drag = Some(drag);
+                    cx.notify();
+                    return;
+                }
+            }
         }
 
         // Secondary-button input is always freehand paint inside the plot.
@@ -2205,6 +2317,11 @@ impl PumpEditor {
             }
             return;
         }
+        if self.crossover_drag.is_some() {
+            self.last_pointer = Some(event.position);
+            self.update_crossover_drag(event.position.x, cx);
+            return;
+        }
         let Some(display_point) = self.normalized_curve_point(event.position) else {
             return;
         };
@@ -2351,6 +2468,25 @@ impl PumpEditor {
             return;
         }
         if self.curve_active_button != Some(event.button) {
+            return;
+        }
+        if self.crossover_drag.is_some() {
+            self.update_crossover_drag(event.position.x, cx);
+            if self.crossover_drag.take().is_some_and(|drag| drag.started) {
+                self.dispatch(
+                    EditorMessage::EffectGesture {
+                        index: CROSSOVER_INDEX,
+                        message: KnobMessage::GestureEnded,
+                    },
+                    cx,
+                );
+            }
+            self.curve_active_button = None;
+            self.curve_drag_start = None;
+            self.last_pointer = Some(event.position);
+            self.crossover_hovered =
+                !event.modifiers.modified() && self.hit_crossover(event.position).is_some();
+            cx.notify();
             return;
         }
         let display_point = self
@@ -3003,6 +3139,9 @@ impl PumpEditor {
             self.pending_option_gesture = None;
             self.curve_active_button = None;
         }
+        if event.modifiers.modified() {
+            self.crossover_hovered = false;
+        }
         self.dispatch(
             EditorMessage::Curve(CurvePreviewMessage::ModifiersChanged {
                 option_held: event.modifiers.alt,
@@ -3178,6 +3317,11 @@ impl PumpEditor {
                 if self.state.borrow().hotkey_help_open() {
                     self.dispatch(EditorMessage::ToggleHotkeyHelp, cx);
                     return;
+                }
+                if self.crossover_drag.take().is_some() {
+                    self.curve_active_button = None;
+                    self.curve_drag_start = None;
+                    cx.notify();
                 }
                 if self.state.borrow().has_active_gesture() {
                     self.state.borrow_mut().cancel_active_gestures();
@@ -3480,6 +3624,7 @@ fn draw_curve(
     bounds: Bounds<Pixels>,
     state: &PumpEditorState,
     last_pointer: Option<Point<Pixels>>,
+    crossover_highlighted: bool,
     window: &mut Window,
     cx: &mut App,
 ) {
@@ -3647,7 +3792,7 @@ fn draw_curve(
         });
     }
     if state.params().effects()[0] >= 0.5 || !state.filter_enabled() {
-        draw_crossover_preview(curve_bounds, state, window, cx);
+        draw_crossover_preview(curve_bounds, state, crossover_highlighted, window, cx);
     }
     let curve_color = if compressor_enabled {
         theme.text_muted.with_alpha(130)
@@ -3902,7 +4047,7 @@ fn draw_curve(
         let playhead_phase = state.status().phase_from_dsp_snapshot(dsp_snapshot);
         let playhead_y = super::projection::sample_display_curve(&curve, playhead_phase, phase);
         let playhead_x = left + playhead_phase * (width - 1.0).max(1.0);
-        let playhead_color = PumpColor::rgb(128, 132, 132);
+        let playhead_color = PumpColor::gray(131);
         let mut playhead = gpui::PathBuilder::stroke(px(1.275));
         playhead.move_to(point(px(playhead_x), px(top)));
         playhead.line_to(point(px(playhead_x), px(top + height)));
@@ -4066,9 +4211,29 @@ fn draw_curve(
     let _ = cx;
 }
 
+fn crossover_plot(left: f32, top: f32, width: f32, height: f32) -> Bounds<Pixels> {
+    Bounds::new(
+        point(px(left), px(top + 12.0)),
+        size(px((width - 1.0).max(1.0)), px((height - 24.0).max(1.0))),
+    )
+}
+
+fn crossover_fraction(frequency: f32) -> f32 {
+    let min = crate::dual_band::MIN[CROSSOVER_INDEX];
+    let max = crate::dual_band::MAX[CROSSOVER_INDEX];
+    (frequency / min).ln() / (max / min).ln()
+}
+
+fn crossover_frequency(fraction: f32) -> f32 {
+    let min = crate::dual_band::MIN[CROSSOVER_INDEX];
+    let max = crate::dual_band::MAX[CROSSOVER_INDEX];
+    min * (max / min).powf(fraction.clamp(0.0, 1.0))
+}
+
 fn draw_crossover_preview(
     bounds: Bounds<Pixels>,
     state: &PumpEditorState,
+    highlighted: bool,
     window: &mut Window,
     cx: &mut App,
 ) {
@@ -4078,10 +4243,11 @@ fn draw_crossover_preview(
     let height = f32::from(bounds.size.height);
     let theme = pump_theme();
     let controls = state.params().effects();
-    let plot_left = left;
-    let plot_top = top + 12.;
-    let plot_width = (width - 1.).max(1.);
-    let plot_height = (height - 24.).max(1.);
+    let plot = crossover_plot(left, top, width, height);
+    let plot_left = f32::from(plot.left());
+    let plot_top = f32::from(plot.top());
+    let plot_width = f32::from(plot.size.width);
+    let plot_height = f32::from(plot.size.height);
     let low_color = PumpColor::rgb(143, 197, 170);
     let high_color = PumpColor::rgb(128, 158, 198);
     for (band, color) in [(0, low_color), (1, high_color)] {
@@ -4090,11 +4256,11 @@ fn draw_crossover_preview(
         area.move_to(point(px(plot_left), px(plot_top + plot_height)));
         for step in 0..=96 {
             let phase = step as f32 / 96.;
-            let hz = 20. * 1000_f32.powf(phase);
+            let hz = crossover_frequency(phase);
             let magnitude = crate::dual_band::crossover_magnitudes(
                 hz,
                 48000.,
-                controls[1],
+                controls[CROSSOVER_INDEX],
                 controls[2] as usize,
             )[band];
             let sample = point(
@@ -4120,17 +4286,25 @@ fn draw_crossover_preview(
             window.paint_path(path, solid(color.with_alpha(140)));
         }
     }
-    let crossover_x = plot_left + (controls[1] / 20.).ln() / 1000_f32.ln() * plot_width;
+    let crossover_x = plot_left + crossover_fraction(controls[CROSSOVER_INDEX]) * plot_width;
+    let line_width = if highlighted { 2.0 } else { 1.0 };
+    let marker = Bounds::new(
+        point(px(crossover_x - line_width * 0.5), plot.top()),
+        size(px(line_width), plot.size.height),
+    );
+    #[cfg(feature = "screenshot-test")]
+    record_screenshot_bounds("crossover-marker", marker);
     window.paint_quad(fill(
-        Bounds::from_corners(
-            point(px(crossover_x), px(plot_top)),
-            point(px(crossover_x + 1.), px(plot_top + plot_height)),
-        ),
-        solid(theme.text_muted.with_alpha(96)),
+        marker,
+        solid(if highlighted {
+            theme.text_primary
+        } else {
+            theme.text_muted.with_alpha(96)
+        }),
     ));
     let frequency = crate::params::format_plain_value_text(
         toybox::clack_plugin::utils::ClapId::new(25),
-        controls[1] as f64,
+        controls[CROSSOVER_INDEX] as f64,
     )
     .unwrap_or_default();
     for (label, lx, ly, color) in [
@@ -4523,10 +4697,10 @@ fn chassis_artwork() -> impl gpui::IntoElement {
                 let cut = 4.0;
                 // Restrained graphite transition, clipped to the tapered recess.
                 for (row, color) in [
-                    PumpColor::rgb(25, 30, 27),
-                    PumpColor::rgb(31, 37, 33),
-                    PumpColor::rgb(37, 43, 39),
-                    PumpColor::rgb(43, 49, 45),
+                    PumpColor::gray(29),
+                    PumpColor::gray(35),
+                    PumpColor::gray(41),
+                    PumpColor::gray(47),
                 ]
                 .into_iter()
                 .enumerate()
@@ -4547,7 +4721,7 @@ fn chassis_artwork() -> impl gpui::IntoElement {
                 bevel.line_to(point(px(right - cut), px(edge + inward * depth)));
                 bevel.line_to(point(px(right), px(edge)));
                 if let Ok(path) = bevel.build() {
-                    window.paint_path(path, solid(PumpColor::rgb(60, 69, 63)));
+                    window.paint_path(path, solid(PumpColor::gray(67)));
                 }
             }
             // Edge recesses meet the inner face of the continuous 1 px frame.
@@ -4572,7 +4746,7 @@ fn chassis_artwork() -> impl gpui::IntoElement {
                     }
                 }
                 if let Ok(path) = bevel.build() {
-                    window.paint_path(path, solid(PumpColor::rgb(60, 69, 63)));
+                    window.paint_path(path, solid(PumpColor::gray(67)));
                 }
             }
         },
@@ -4876,50 +5050,7 @@ impl PumpEditor {
                     all(test, target_os = "windows", feature = "vst3")
                 ))]
                 record_screenshot_bounds(format!("knob-{target:?}"), bounds);
-                let center = point(
-                    bounds.left() + bounds.size.width * 0.5,
-                    bounds.top() + bounds.size.height * 0.5,
-                );
-                let radius =
-                    (f32::from(bounds.size.width).min(f32::from(bounds.size.height)) * 0.5 - 2.0)
-                        .max(1.0);
-                let start = std::f32::consts::PI * 0.75;
-                let end = std::f32::consts::PI * 2.25;
-                let mut track = gpui::PathBuilder::stroke(px(1.0));
-                let mut active = gpui::PathBuilder::stroke(px(2.2));
-                for index in 0..=48 {
-                    let fraction = index as f32 / 48.0;
-                    let angle = start + (end - start) * fraction;
-                    let point = point(
-                        center.x + px(radius * angle.cos()),
-                        center.y + px(radius * angle.sin()),
-                    );
-                    if index == 0 {
-                        track.move_to(point);
-                    } else {
-                        track.line_to(point);
-                    }
-                    if fraction <= normalized {
-                        if index == 0 {
-                            active.move_to(point);
-                        } else {
-                            active.line_to(point);
-                        }
-                    }
-                }
-                if let Ok(path) = track.build() {
-                    window.paint_path(path, solid(theme.border_emphasis));
-                }
-                if let Ok(path) = active.build() {
-                    window.paint_path(path, solid(theme.accent_mint));
-                }
-                window.paint_quad(fill(
-                    Bounds::from_corners(
-                        point(center.x - px(1.0), center.y - px(1.0)),
-                        point(center.x + px(1.0), center.y + px(1.0)),
-                    ),
-                    solid(theme.border_emphasis),
-                ));
+                draw_knob_face(bounds, normalized, window);
             },
         )
         .w(px(PUMP_VISUAL_METRICS.knob))
@@ -5194,20 +5325,46 @@ impl PumpEditor {
 
     fn compressor_deck(&self, cx: &Context<Self>) -> gpui::Div {
         let values = self.state.borrow().params().compressor();
-        let rows = (0..3).map(|row| {
-            let start = row * 7;
-            let end = (start + 7).min(crate::compressor_controls::COUNT);
-            div().w_full().h(px(25.0)).flex().gap(px(3.0)).children(
-                (start..end).map(|index| self.compressor_control(index, values[index], cx)),
-            )
-        });
+        let group = |heading, knobs: &[usize], switches: &[usize]| {
+            div()
+                .min_w(px(0.0))
+                .h_full()
+                .flex()
+                .flex_col()
+                .gap(px(3.0))
+                .child(
+                    div()
+                        .h(px(14.0))
+                        .border_b_1()
+                        .border_color(solid(pump_theme().border))
+                        .child(group_heading(heading)),
+                )
+                .child(
+                    div().flex().h(px(47.0)).children(
+                        knobs
+                            .iter()
+                            .map(|&index| self.compressor_control(index, values[index], cx)),
+                    ),
+                )
+                .child(
+                    div().flex().gap(px(4.0)).children(
+                        switches
+                            .iter()
+                            .map(|&index| self.compressor_control(index, values[index], cx)),
+                    ),
+                )
+        };
         div()
             .w_full()
-            .h(px(DECK_HEIGHT))
+            .h(px(84.0))
             .flex()
-            .flex_col()
-            .gap(px(2.0))
-            .children(rows)
+            .gap(px(12.0))
+            .child(
+                group("COMPRESSOR", &[1, 4, 2, 3, 5, 6, 7], &[0, 17, 8, 18])
+                    .w(relative(0.6))
+                    .flex_shrink_0(),
+            )
+            .child(group("SIDECHAIN", &[10, 11, 14, 15], &[9, 16, 12, 13]).flex_1())
     }
 
     fn compressor_control(
@@ -5219,14 +5376,60 @@ impl PumpEditor {
         let id = COMPRESSOR_CONTROL_IDS[index];
         let parameter = toybox::clack_plugin::utils::ClapId::new(36 + index as u32);
         let text = format_plain_value_text(parameter, f64::from(value)).unwrap_or_default();
-        let label = format!("{} {}", COMPRESSOR_SHORT_LABELS[index], text);
         let focus = self.button_focus_handle(id).clone();
         let focus_down = focus.clone();
-        let active = crate::compressor_controls::stepped(index) && value >= 0.5;
-        button(id, label, active, 1.0, Some(&focus))
-            .flex_1()
-            .h(px(24.0))
-            .text_size(px(9.0))
+        let label = COMPRESSOR_SHORT_LABELS[index];
+        let control = if crate::compressor_controls::stepped(index) {
+            let active = index != 13 && value >= 0.5;
+            let label = if index == 13 { text } else { label.into() };
+            button(id, label, active, 1.0, Some(&focus))
+                .flex_1()
+                .h(px(17.0))
+                .text_size(px(8.0))
+        } else {
+            let normalized =
+                normalized_from_plain_value(parameter, f64::from(value)).unwrap_or(0.0) as f32;
+            let theme = pump_theme();
+            let face = canvas(
+                |_, _, _| {},
+                move |bounds, _, window, _| draw_knob_face(bounds, normalized, window),
+            )
+            .w(px(26.0))
+            .h(px(26.0));
+            let knob = div()
+                .id(id)
+                .track_focus(&focus)
+                .relative()
+                .flex_1()
+                .min_w(px(0.0))
+                .h_full()
+                .flex()
+                .flex_col()
+                .justify_center()
+                .items_center()
+                .text_size(px(9.0))
+                .line_height(px(10.0))
+                .focus(|style| style.border_b_1().border_color(solid(theme.text_primary)))
+                .child(div().text_color(solid(theme.text_muted)).child(label))
+                .child(face)
+                .child(div().text_color(solid(theme.text_primary)).child(text));
+            #[cfg(any(
+                feature = "screenshot-test",
+                all(test, target_os = "windows", feature = "vst3")
+            ))]
+            let knob = knob.child(
+                canvas(
+                    move |bounds, _, _| record_screenshot_bounds(id, bounds),
+                    |_, _, _, _| {},
+                )
+                .absolute()
+                .top(px(0.0))
+                .left(px(0.0))
+                .size_full(),
+            );
+            knob
+        };
+        control
             .on_hover(cx.listener(move |view, hovered: &bool, _, cx| {
                 if *hovered {
                     view.compressor_hover = Some(index);
@@ -5359,6 +5562,53 @@ impl PumpEditor {
     }
 }
 
+fn draw_knob_face(bounds: Bounds<Pixels>, normalized: f32, window: &mut Window) {
+    let theme = pump_theme();
+    let center = point(
+        bounds.left() + bounds.size.width * 0.5,
+        bounds.top() + bounds.size.height * 0.5,
+    );
+    let radius =
+        (f32::from(bounds.size.width).min(f32::from(bounds.size.height)) * 0.5 - 2.0).max(1.0);
+    let start = std::f32::consts::PI * 0.75;
+    let end = std::f32::consts::PI * 2.25;
+    let mut track = gpui::PathBuilder::stroke(px(1.0));
+    let mut active = gpui::PathBuilder::stroke(px(2.2));
+    for index in 0..=48 {
+        let fraction = index as f32 / 48.0;
+        let angle = start + (end - start) * fraction;
+        let point = point(
+            center.x + px(radius * angle.cos()),
+            center.y + px(radius * angle.sin()),
+        );
+        if index == 0 {
+            track.move_to(point);
+        } else {
+            track.line_to(point);
+        }
+        if fraction <= normalized {
+            if index == 0 {
+                active.move_to(point);
+            } else {
+                active.line_to(point);
+            }
+        }
+    }
+    if let Ok(path) = track.build() {
+        window.paint_path(path, solid(theme.border_emphasis));
+    }
+    if let Ok(path) = active.build() {
+        window.paint_path(path, solid(theme.accent_mint));
+    }
+    window.paint_quad(fill(
+        Bounds::from_corners(
+            point(center.x - px(1.0), center.y - px(1.0)),
+            point(center.x + px(1.0), center.y + px(1.0)),
+        ),
+        solid(theme.border_emphasis),
+    ));
+}
+
 fn group_heading(label: &'static str) -> gpui::Div {
     div()
         .text_size(px(9.))
@@ -5438,12 +5688,22 @@ impl Render for PumpEditor {
         let draw_state = Rc::clone(&self.state);
         let editor_entity = cx.entity().downgrade();
         let last_pointer = self.last_pointer;
+        let crossover_highlighted = self.crossover_drag.is_some()
+            || (self.crossover_hovered
+                && last_pointer.is_some_and(|point| self.hit_crossover(point).is_some()));
         let curve = canvas(
             move |bounds, _, _| {
                 *curve_bounds.borrow_mut() = Some(bounds);
             },
             move |bounds, _, window, cx| {
-                draw_curve(bounds, &draw_state.borrow(), last_pointer, window, cx);
+                draw_curve(
+                    bounds,
+                    &draw_state.borrow(),
+                    last_pointer,
+                    crossover_highlighted,
+                    window,
+                    cx,
+                );
                 let down_editor_entity = editor_entity.clone();
                 window.on_mouse_event(move |_: &MouseDownEvent, phase, _window, cx| {
                     if phase == DispatchPhase::Capture {
@@ -5497,6 +5757,9 @@ impl Render for PumpEditor {
             .min_h(px(140.))
             .border_1()
             .border_color(solid(theme.border))
+            .when(crossover_highlighted, |element| {
+                element.cursor(CursorStyle::ResizeLeftRight)
+            })
             .on_mouse_down(MouseButton::Left, cx.listener(Self::curve_mouse_down))
             .on_mouse_down(MouseButton::Right, cx.listener(Self::curve_mouse_down))
             .child(curve);
@@ -5827,7 +6090,7 @@ impl Render for PumpEditor {
             .absolute()
             .top(px(2.0))
             .right(px(3.0))
-            .text_color(solid(super::visual_system::PumpColor::rgb(76, 82, 80)))
+            .text_color(solid(super::visual_system::PumpColor::gray(81)))
             .text_size(px(6.0))
             .line_height(px(8.0))
             .child(crate::gui::build_version_label());
@@ -5969,6 +6232,10 @@ impl Render for PumpEditor {
             Some(self.button_focus_handle("compressor-capture")),
         )
         .h(px(FOOTER_HEIGHT))
+        .on_hover(cx.listener(|view, hovered: &bool, _, cx| {
+            view.capture_hovered = *hovered;
+            cx.notify();
+        }))
         .on_click(cx.listener(|view, event: &gpui::ClickEvent, _, cx| {
             if !event.is_keyboard() {
                 let message = if view.state.borrow().capture_pending() {
@@ -5991,21 +6258,24 @@ impl Render for PumpEditor {
             state.capture_message().unwrap_or("")
         }
         .to_owned();
-        let capture_message = self
-            .compressor_hover
-            .filter(|_| self.compressor_panel_open)
-            .map(|index| {
-                format!(
-                    "{} • {}",
-                    crate::compressor_controls::NAMES[index],
-                    if crate::compressor_controls::stepped(index) {
-                        "click or use arrows"
-                    } else {
-                        "drag or use arrows"
-                    }
-                )
-            })
-            .unwrap_or_default();
+        let capture_message = if capture_pending || self.capture_hovered {
+            capture_status
+        } else {
+            self.compressor_hover
+                .filter(|_| self.compressor_panel_open)
+                .map(|index| {
+                    format!(
+                        "{} • {}",
+                        crate::compressor_controls::NAMES[index],
+                        if crate::compressor_controls::stepped(index) {
+                            "click or use arrows"
+                        } else {
+                            "drag or use arrows"
+                        }
+                    )
+                })
+                .unwrap_or_default()
+        };
         let footer = div()
             .h(px(FOOTER_HEIGHT))
             .w_full()
@@ -6133,27 +6403,6 @@ impl Render for PumpEditor {
             .on_modifiers_changed(cx.listener(Self::handle_modifiers))
             .child(chassis_artwork())
             .child(header)
-            .child(
-                div()
-                    .h(px(24.))
-                    .flex_shrink_0()
-                    .border_b_1()
-                    .border_color(solid(theme.border))
-                    .flex()
-                    .items_center()
-                    .justify_between()
-                    .child(group_heading(if params.compressor()[0] >= 0.5 {
-                        "LIVE COMPRESSION • CAPTURE TO EDIT"
-                    } else {
-                        "ENVELOPE"
-                    }))
-                    .child(
-                        div()
-                            .text_size(px(9.0))
-                            .text_color(solid(theme.text_muted))
-                            .child(capture_status),
-                    ),
-            )
             .child(curve_area)
             .child(slots)
             .child(deck)

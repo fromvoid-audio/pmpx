@@ -23,6 +23,11 @@ impl PumpColor {
         Self { r, g, b, a: 255 }
     }
 
+    /// Construct an opaque neutral gray.
+    pub(crate) const fn gray(value: u8) -> Self {
+        Self::rgb(value, value, value)
+    }
+
     /// Return this color with a new alpha channel.
     pub(crate) const fn with_alpha(self, a: u8) -> Self {
         Self { a, ..self }
@@ -70,20 +75,20 @@ pub(crate) struct PumpTheme {
 /// Return Pump's fixed dark-coral theme for every supported viewport tier.
 pub(crate) const fn pump_theme() -> PumpTheme {
     PumpTheme {
-        clear: PumpColor::rgb(39, 43, 40),
-        display: PumpColor::rgb(31, 36, 34),
-        surface_overlay: PumpColor::rgb(48, 55, 50),
-        border: PumpColor::rgb(73, 83, 76),
-        border_emphasis: PumpColor::rgb(91, 103, 94),
-        grid_strong: PumpColor::rgb(48, 55, 50),
-        grid_soft: PumpColor::rgb(37, 44, 40),
+        clear: PumpColor::gray(42),
+        display: PumpColor::gray(35),
+        surface_overlay: PumpColor::gray(53),
+        border: PumpColor::gray(80),
+        border_emphasis: PumpColor::gray(100),
+        grid_strong: PumpColor::gray(53),
+        grid_soft: PumpColor::gray(42),
         accent_mint: PumpColor::rgb(233, 107, 80),
         accent_copper: PumpColor::rgb(233, 107, 80),
         accent_warning: PumpColor::rgb(215, 92, 73),
         accent_danger: PumpColor::rgb(215, 92, 73),
-        text_primary: PumpColor::rgb(213, 216, 214),
-        text_muted: PumpColor::rgb(162, 171, 164),
-        control_disabled_fill: PumpColor::rgb(31, 36, 34),
+        text_primary: PumpColor::gray(215),
+        text_muted: PumpColor::gray(169),
+        control_disabled_fill: PumpColor::gray(35),
     }
 }
 
@@ -221,10 +226,24 @@ mod tests {
     fn pump_theme_is_fixed_and_uses_technical_instrument_values() {
         let theme = pump_theme();
         assert_eq!(theme, pump_theme());
-        assert_eq!(theme.clear, PumpColor::rgb(39, 43, 40));
+        assert_eq!(theme.clear, PumpColor::gray(42));
         assert_eq!(theme.accent_mint, PumpColor::rgb(233, 107, 80));
         assert_eq!(theme.accent_copper, PumpColor::rgb(233, 107, 80));
-        assert_eq!(theme.text_primary, PumpColor::rgb(213, 216, 214));
+        assert_eq!(theme.text_primary, PumpColor::gray(215));
+        for neutral in [
+            theme.clear,
+            theme.display,
+            theme.surface_overlay,
+            theme.border,
+            theme.border_emphasis,
+            theme.grid_strong,
+            theme.grid_soft,
+            theme.text_primary,
+            theme.text_muted,
+            theme.control_disabled_fill,
+        ] {
+            assert_eq!(neutral, PumpColor::gray(neutral.r));
+        }
     }
 
     #[test]

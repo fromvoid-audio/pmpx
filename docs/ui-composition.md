@@ -1,8 +1,8 @@
 # Pump instrument composition
 
-The editor follows the supplied Technical Futurist Interface Style Guide: layered graphite and sage surfaces, restrained muted-coral emphasis, monospaced labels, thin functional rails, and a dominant envelope plot. Mint LP and blue HP distinguish frequency responses from the envelope.
+The editor follows the supplied Technical Futurist Interface Style Guide: layered neutral-gray surfaces, restrained muted-coral emphasis, monospaced labels, thin functional rails, and a dominant envelope plot. Mint LP and blue HP distinguish frequency responses from the envelope.
 
-The header places “PORTALSURFER / PUMP” on the left and timing, history, A/B, and help controls on the right. The actual package version remains tiny and subdued at the extreme top-right. The envelope keeps its full-area crossover overlay, offset editing, waveform display, and gain-reduction meter. Presets sit directly below the plot.
+The header places “PORTALSURFER / PUMP” on the left and timing, history, A/B, and help controls on the right. The actual package version remains tiny and subdued at the extreme top-right. The envelope keeps its full-area crossover overlay, offset editing, waveform display, and gain-reduction meter. The plot starts below the header, with presets directly beneath it.
 
 The parameter deck has three aligned groups:
 
@@ -10,7 +10,7 @@ The parameter deck has three aligned groups:
 - **Bands:** crossover slope and stacked LP/HP mix bars with internal percentages and Solo controls. Visible bars remain 80 × 14 px, with larger native drag targets.
 - **Level:** Mix and Output knobs. Free timing also exposes the Rate knob here.
 
-The footer separates waveform display mode from effect bypass. Existing automation IDs, DSP, keyboard actions, undo, value entry, and persistence remain intact. No spectral feature is introduced.
+The COMP button opens a deck with rotary compressor and sidechain controls plus grouped switches. Capture feedback appears next to Capture in the footer. Existing automation IDs, DSP, keyboard actions, undo, value entry, and persistence remain intact. No spectral feature is introduced.
 
 The Frame composition is a visual reference; native control behavior belongs to Pump. Native macOS/Windows rendering requires validation on those platforms.
 

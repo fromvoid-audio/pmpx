@@ -639,6 +639,11 @@ mod macos {
         let _: () = msg_send![fixture.window, makeFirstResponder: std::ptr::null_mut::<Object>()];
         pump_appkit(app, &gui, 0.1);
         capture_frame(&gui, "opened instrument editor");
+        let [_, plot_top, _, _] = pump::gui_gpui::screenshot_bounds("curve-plot");
+        assert!(
+            plot_top < 55.0,
+            "the plot should start directly below the header"
+        );
 
         let transport = pump::GuiTransportTelemetry {
             is_playing: false,
@@ -667,6 +672,9 @@ mod macos {
             meter_pixel_at(0.08)[0].saturating_sub(meter_pixel_at(0.92)[0]) > 60,
             "gain reduction should fill from the top of the meter"
         );
+        let idle_track = meter_pixel_at(0.92);
+        assert_eq!(idle_track[0], idle_track[1]);
+        assert_eq!(idle_track[1], idle_track[2]);
         status.mark_gain_reduction_inactive();
         status.update_transport(
             0.0,
@@ -817,6 +825,38 @@ mod macos {
         let slope = params.effects()[2];
         click_control(fixture, "dual-slope", 0);
         assert_ne!(params.effects()[2], slope);
+
+        // A grab slightly off the line must preserve its pointer offset.
+        params.set_effect(0, 0.0);
+        params.set_effect(1, 200.0);
+        pump_appkit(app, &gui, 0.04);
+        let [marker_x, marker_y, marker_width, marker_height] =
+            pump::gui_gpui::screenshot_bounds("crossover-marker");
+        let x = f64::from(marker_x + marker_width * 0.5 + 4.0);
+        let y = f64::from(marker_y + marker_height * 0.25);
+        let [_, _, plot_width, _] = pump::gui_gpui::screenshot_bounds("curve-plot");
+        let bright_gray =
+            |pixel: &[u8]| pixel[0] > 180 && pixel[0] == pixel[1] && pixel[1] == pixel[2];
+        let idle = count_plot_pixels(&gui, bright_gray);
+        send_mouse_move(fixture.window, x, y);
+        pump_appkit(app, &gui, 0.04);
+        assert!(
+            count_plot_pixels(&gui, bright_gray) > idle + 40,
+            "hover should brighten the crossover line"
+        );
+        send_click(fixture.window, x, y, 0);
+        assert_eq!(params.effects()[..2], [0.0, 200.0]);
+        let curve = params.editable_curve_snapshot();
+        send_mouse_down(fixture.window, x, y, 0);
+        let end_x = x + f64::from((plot_width - 1.0) / 3.0);
+        send_mouse_dragged(fixture.window, end_x, y, 0);
+        send_mouse_up(fixture.window, end_x, y, 0);
+        pump_appkit(app, &gui, 0.04);
+        assert_eq!(params.effects()[0], 1.0);
+        assert!((params.effects()[1] - 2000.0).abs() < 1.0);
+        assert_eq!(params.editable_curve_snapshot(), curve);
+        send_key(app, fixture.window, &gui, "z", 6, COMMAND);
+        assert_eq!(params.effects()[..2], [0.0, 200.0]);
 
         // Compressor controls remain within the minimum editor and use native input.
         click_control(fixture, "compressor-panel", 0);

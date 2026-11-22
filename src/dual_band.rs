@@ -1,6 +1,7 @@
 //! Allocation-free minimum-phase dual-band crossover.
 //! Controls retain IDs 24..30; removed IDs 31..35 are never reused.
 pub const COUNT: usize = 7;
+pub(crate) const CROSSOVER_INDEX: usize = 1;
 pub const DEFAULTS: [f32; COUNT] = [0., 200., 1., 1., 1., 0., 0.];
 pub const MIN: [f32; COUNT] = [0., 20., 0., 0., 0., 0., 0.];
 pub const MAX: [f32; COUNT] = [1., 20000., 1., 1., 1., 1., 1.];

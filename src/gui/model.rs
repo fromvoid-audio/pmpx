@@ -1158,7 +1158,7 @@ impl PumpEditorState {
     // The compact UI has no separate Dual switch. Preserve the host default
     // and legacy project state, but make an intentional band edit audible.
     fn activate_bands_for_edit(&mut self, index: usize) -> bool {
-        if !(2..=6).contains(&index) || self.params.effects()[0] >= 0.5 {
+        if index == 0 || self.params.effects()[0] >= 0.5 {
             return true;
         }
         if !self
@@ -1999,7 +1999,7 @@ fn reduce_editor_message(state: &mut PumpEditorState, message: EditorMessage) {
             }
         }
         EditorMessage::EffectGesture { index, message } => {
-            if !matches!(index, 3 | 4) {
+            if !matches!(index, crate::dual_band::CROSSOVER_INDEX | 3 | 4) {
                 return;
             }
             let id = ClapId::new(24 + index as u32);
@@ -5319,6 +5319,35 @@ mod tests {
         assert!(state.selected_curve_nodes.is_empty());
         assert!(!state.refresh_host_projection());
     }
+    #[test]
+    fn crossover_drag_activates_dual_and_emits_one_host_gesture() {
+        let sink = Arc::new(RecordingSink::default());
+        let mut state = editor(Arc::clone(&sink));
+        let index = crate::dual_band::CROSSOVER_INDEX;
+        let id = ClapId::new(25);
+        for message in [
+            KnobMessage::GestureStarted,
+            KnobMessage::ValueChanged { value: 800.0 },
+            KnobMessage::GestureEnded,
+        ] {
+            state.dispatch(EditorMessage::EffectGesture { index, message });
+        }
+        assert_eq!(
+            sink.events(),
+            [
+                SinkEvent::Begin(id),
+                SinkEvent::Edit(ClapId::new(24), 1.0),
+                SinkEvent::Value(id, 800.0),
+                SinkEvent::End(id),
+            ]
+        );
+        assert_eq!(state.params.effects()[index], 800.0);
+        assert_eq!(state.undo_history.len(), 1);
+        assert!(!state.has_active_gesture());
+        state.dispatch(EditorMessage::Undo);
+        assert_eq!(state.params.effects(), crate::dual_band::DEFAULTS);
+    }
+
     #[test]
     fn band_mix_slider_drag_is_one_undo_step_and_closes_on_teardown() {
         for index in [3, 4] {

@@ -4,19 +4,19 @@ Pump follows Frame's Technical Futurist R7 audio-device rules at commit `5815ef6
 
 | Role | Color |
 | --- | --- |
-| Chassis | `#272B28` |
-| Controls / overlays | `#303732` |
-| Recessed display | `#1F2422` |
-| Sage border | `#49534C` |
-| Emphasized bevel | `#5B675E` |
+| Chassis | `#2A2A2A` |
+| Controls / overlays | `#353535` |
+| Recessed display | `#232323` |
+| Border | `#505050` |
+| Emphasized bevel | `#646464` |
 | Coral accent | `#E96B50` |
-| Primary text | `#D5D8D6` |
-| Secondary text | `#A2ABA4` |
+| Primary text | `#D7D7D7` |
+| Secondary text | `#A9A9A9` |
 | Warning / overload | `#D75C49` |
 | Focus | `#8CDDD0` |
 | LP / HP curves | `#76B89D` / `#809EC6` |
 | LP / HP opaque slider fills | `#415F4F` / `#3F526A` |
-| Version | `#4C5250` |
+| Version | `#515151` |
 
 The historical `accent_mint` and `accent_copper` token names both map to coral. Band colors preserve the user's explicit mint/blue preference. Focus is distinguished with an outline; active buttons and sound sides also use geometry/text state. The meter uses an opaque continuous fill with overload color above 75% of its reduction range.
 

@@ -200,4 +200,4 @@ Pump includes a one-crossover, 12/24 dB Linkwitz–Riley dual-band mode. See [co
 
 Smooth and Swing use horizontal sliders without handles; Mix and Output retain their rotary knobs.
 
-The composition groups stacked LP/HP mix sliders beside Mix/Output, with Smooth/Swing in the compact strip immediately below the curve presets. The strip retains the crossover slope; dual enable and crossover frequency remain host parameters.
+The composition groups stacked LP/HP mix sliders beside Mix/Output, with Smooth/Swing in the compact strip immediately below the curve presets. Set the slope in the strip and drag the crossover marker in the plot to adjust its frequency.
