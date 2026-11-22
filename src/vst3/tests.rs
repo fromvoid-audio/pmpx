@@ -1565,6 +1565,53 @@ fn processor_supports_exact_in_place_channel_buffers() {
 }
 
 #[test]
+fn track_spectrum_reads_main_input_before_in_place_vst3_processing() {
+    use crate::track_spectrum::{SpectrumAnalyzer, WINDOW_SAMPLES};
+
+    let shared = Arc::new(PumpVst3Shared::new());
+    shared.params.set_output_gain_db(-24.0);
+    shared.status.track_spectrum().set_enabled(true);
+    let processor = PumpVst3Processor::new(Arc::clone(&shared));
+    let mut fixture = stereo_process_fixture(WINDOW_SAMPLES, 0.0);
+    for (index, (left, right)) in fixture
+        ._input_left
+        .iter_mut()
+        .zip(&mut fixture._input_right)
+        .enumerate()
+    {
+        let value =
+            0.5 * (std::f32::consts::TAU * 80.0 * index as f32 / WINDOW_SAMPLES as f32).sin();
+        *left = value;
+        *right = -value;
+    }
+    fixture._output_channel_buffers[0] = fixture._input_left.as_mut_ptr();
+    fixture._output_channel_buffers[1] = fixture._input_right.as_mut_ptr();
+    crate::test_alloc::assert_no_alloc(|| {
+        assert_eq!(
+            unsafe { processor.process(&mut fixture.process_data) },
+            process_ok()
+        );
+    });
+    assert!(fixture._input_left[WINDOW_SAMPLES / 2..]
+        .iter()
+        .all(|sample| sample.abs() < 0.1));
+
+    let mut analyzer = SpectrumAnalyzer::default();
+    let trace = analyzer
+        .update(shared.status.track_spectrum(), 1_000_000)
+        .unwrap();
+    let peak = trace.into_iter().fold(0.0_f32, f32::max);
+    assert!(
+        peak > 0.90 && peak < 0.94,
+        "spectrum should show the pre-gain input"
+    );
+    assert_eq!(unsafe { processor.setActive(0) }, kResultOk);
+    assert!(analyzer
+        .update(shared.status.track_spectrum(), 1_010_000)
+        .is_none());
+}
+
+#[test]
 fn processor_silences_valid_outputs_when_input_is_missing() {
     let processor = PumpVst3Processor::new(Arc::new(PumpVst3Shared::new()));
     let mut fixture = stereo_process_fixture(32, 9.0);

@@ -210,6 +210,7 @@ impl PumpVst3Runtime {
         }
 
         self.sample_rate = clamped;
+        status.track_spectrum().invalidate();
         self.engine
             .reconfigure(self.sample_rate, params.curve_snapshot(), params.bypassed());
         self.engine

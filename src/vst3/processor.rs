@@ -499,6 +499,7 @@ impl IAudioProcessorTrait for PumpVst3Processor {
             &self.shared.status,
             buffers.sidechain.is_some(),
             frame_count,
+            runtime.sample_rate,
         );
         let telemetry = unsafe {
             process_stereo_block_raw(

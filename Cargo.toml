@@ -28,6 +28,7 @@ bench = false
 toybox = { git = "https://github.com/PORTALSURFER/toybox.git", rev = "db656f567fb3c9e7ce3f1b1acd07a77ce7206170", default-features = false }
 image = { version = "0.25", default-features = false, features = ["png"], optional = true }
 unicode-segmentation = "1.12"
+rustfft = "6.4"
 
 [build-dependencies]
 toybox = { git = "https://github.com/PORTALSURFER/toybox.git", rev = "db656f567fb3c9e7ce3f1b1acd07a77ce7206170", default-features = false }

@@ -31,6 +31,7 @@ use crate::params::{
     PARAM_FILTER_LP_FREQ_ID, PARAM_FILTER_LP_Q_ID, PARAM_FREE_RATE_ID, PARAM_MIX_ID,
     PARAM_OUTPUT_GAIN_ID, PARAM_SMOOTH_ID, PARAM_SWING_ID, SYNC_DIVISIONS, TIMING_MODE_FREE,
 };
+use crate::track_spectrum::{SpectrumAnalyzer, SpectrumTrace};
 
 use super::model::HostParamFlushRequester;
 use super::model::{
@@ -960,6 +961,8 @@ fn new_hosted_gui(
     let pointer_cancel_pending = Rc::new(Cell::new(false));
     let factory_pointer_cancel_pending = Rc::clone(&pointer_cancel_pending);
     let pointer_cancel_state = Rc::clone(&state);
+    let visible = Rc::new(Cell::new(false));
+    let factory_visible = Rc::clone(&visible);
     toybox::gpui_gui::GpuiHostedGui::new(
         class_name,
         move |_window, cx| {
@@ -968,6 +971,7 @@ fn new_hosted_gui(
             let teardown_in_progress = Rc::clone(&factory_teardown_in_progress);
             let pointer_cancel_pending = Rc::clone(&factory_pointer_cancel_pending);
             let resize = Rc::clone(&resize);
+            let visible = Rc::clone(&factory_visible);
             cx.new(move |cx| {
                 PumpEditor::new(
                     state,
@@ -975,6 +979,7 @@ fn new_hosted_gui(
                     teardown_in_progress,
                     pointer_cancel_pending,
                     resize,
+                    visible,
                     cx,
                 )
             })
@@ -994,10 +999,12 @@ fn new_hosted_gui(
             state.cancel_active_gestures();
         }
     })
-    .with_visibility_callback(move |visible| {
-        if visible {
+    .with_visibility_callback(move |is_visible| {
+        visible.set(is_visible);
+        if is_visible {
             return;
         }
+        status.track_spectrum().set_enabled(false);
         if visibility_teardown_in_progress.get() {
             return;
         }
@@ -1109,6 +1116,30 @@ pub fn new_screenshot_gui_with_params() -> (
     (gui, params, status)
 }
 
+/// Feed a deterministic stereo signal through the spectrum tap for native UI tests.
+#[cfg(feature = "screenshot-test")]
+#[doc(hidden)]
+pub fn seed_screenshot_track_spectrum(status: &crate::GuiStatus) {
+    use crate::track_spectrum::{SpectrumWriter, WINDOW_SAMPLES};
+    let input = status.track_spectrum();
+    let mut writer = SpectrumWriter::default();
+    let sample_rate = 48_000.0;
+    assert!(
+        writer.begin_block(input, sample_rate),
+        "open FILTER before feeding it audio"
+    );
+    for index in 0..WINDOW_SAMPLES {
+        let tone = |bin| {
+            let phase = std::f32::consts::TAU * bin * index as f32 / WINDOW_SAMPLES as f32;
+            f32::sin(phase)
+        };
+        let bass = 0.35 * tone(8.0);
+        let mid = 0.16 * tone(28.0) + 0.12 * tone(84.0);
+        let upper = 0.04 * tone(260.0) + 0.02 * tone(647.0);
+        writer.record(input, [bass + mid + upper, bass + mid - upper]);
+    }
+}
+
 /// Seed a coherent cycle for native waveform and compressor preview tests.
 #[cfg(feature = "screenshot-test")]
 #[doc(hidden)]
@@ -1119,7 +1150,7 @@ pub fn seed_screenshot_waveform(status: &crate::GuiStatus, params: &PumpParams) 
     let frames = INCOMING_WAVEFORM_BIN_COUNT * 2;
     let mut writers = WaveformWriters::default();
     status.mark_waveforms_unavailable();
-    let mut capture = writers.begin_block(status, true, frames);
+    let mut capture = writers.begin_block(status, true, frames, 48_000.0);
     for index in 0..frames {
         let phase = index as f32 / frames as f32;
         let carrier = (phase * std::f32::consts::TAU * 2.0).sin().abs();
@@ -1190,6 +1221,8 @@ struct PumpEditor {
     active_compressor_drag: Option<(usize, f32, f32)>,
     compressor_panel_open: bool,
     filter_panel_open: bool,
+    visible: Rc<Cell<bool>>,
+    spectrum: Option<SpectrumAnalyzer>,
     main_panel_width: Option<u32>,
     resize: ResizeRequester,
     resize_task: Option<gpui::Task<()>>,
@@ -1232,6 +1265,7 @@ impl PumpEditor {
         teardown_in_progress: Rc<Cell<bool>>,
         pointer_cancel_pending: Rc<Cell<bool>>,
         resize: ResizeRequester,
+        visible: Rc<Cell<bool>>,
         cx: &mut Context<Self>,
     ) -> Self {
         let targets = [
@@ -1377,6 +1411,8 @@ impl PumpEditor {
             active_compressor_drag: None,
             compressor_panel_open: false,
             filter_panel_open: false,
+            visible,
+            spectrum: None,
             main_panel_width: None,
             resize,
             resize_task: None,
@@ -4387,6 +4423,34 @@ fn crossover_plot(left: f32, top: f32, width: f32, height: f32) -> Bounds<Pixels
     )
 }
 
+fn draw_track_spectrum(plot: Bounds<Pixels>, spectrum: &SpectrumTrace, window: &mut Window) {
+    let mut line = gpui::PathBuilder::stroke(px(1.0));
+    let mut area = gpui::PathBuilder::fill();
+    area.move_to(point(plot.left(), plot.bottom()));
+    for (index, &height) in spectrum.iter().enumerate() {
+        let fraction = index as f32 / (spectrum.len() - 1) as f32;
+        let sample = point(
+            plot.left() + plot.size.width * fraction,
+            plot.bottom() - plot.size.height * height,
+        );
+        if index == 0 {
+            line.move_to(sample);
+        } else {
+            line.line_to(sample);
+        }
+        area.line_to(sample);
+    }
+    area.line_to(point(plot.right(), plot.bottom()));
+    area.close();
+    let gray = pump_theme().text_muted;
+    if let Ok(path) = area.build() {
+        window.paint_path(path, solid(gray.with_alpha(33)));
+    }
+    if let Ok(path) = line.build() {
+        window.paint_path(path, solid(gray.with_alpha(130)));
+    }
+}
+
 fn crossover_fraction(frequency: f32) -> f32 {
     let min = crate::dual_band::MIN[CROSSOVER_INDEX];
     let max = crate::dual_band::MAX[CROSSOVER_INDEX];
@@ -5524,7 +5588,11 @@ impl PumpEditor {
             )
     }
 
-    fn filter_panel(&self, cx: &Context<Self>) -> gpui::Stateful<gpui::Div> {
+    fn filter_panel(
+        &self,
+        spectrum: Option<SpectrumTrace>,
+        cx: &Context<Self>,
+    ) -> gpui::Stateful<gpui::Div> {
         let theme = pump_theme();
         let bounds_ref = Rc::clone(&self.frequency_bounds);
         let state = Rc::clone(&self.state);
@@ -5541,6 +5609,9 @@ impl PumpEditor {
                 window.paint_quad(fill(bounds, solid(theme.display)));
                 let (left, top, width, height) = frequency_plot_geometry(bounds);
                 let grid = crossover_plot(left, top, width, height);
+                if let Some(spectrum) = &spectrum {
+                    draw_track_spectrum(grid, spectrum, window);
+                }
                 for fraction in [0.0, 1.0 / 3.0, 2.0 / 3.0, 1.0] {
                     let x = grid.left() + grid.size.width * fraction;
                     window.paint_quad(fill(
@@ -6009,6 +6080,16 @@ impl Render for PumpEditor {
         }
         self.pump_tick(window, cx);
         let state = self.state.borrow();
+        let input = state.status().track_spectrum();
+        let show_spectrum = self.filter_panel_open && self.visible.get();
+        input.set_enabled(show_spectrum);
+        let spectrum = if show_spectrum {
+            self.spectrum
+                .get_or_insert_with(SpectrumAnalyzer::default)
+                .update(input, crate::time_utils::monotonic_micros())
+        } else {
+            None
+        };
         let theme = pump_theme();
         let params = state.params();
         let active_sound = params.active_sound();
@@ -6754,7 +6835,7 @@ impl Render for PumpEditor {
         let dock_left = left > 0 && available >= left;
         let dock_right = right > 0 && available >= right + if dock_left { left } else { 0 };
         let compressor = dock_left.then(|| self.compressor_panel(cx));
-        let filter = dock_right.then(|| self.filter_panel(cx));
+        let filter = dock_right.then(|| self.filter_panel(spectrum, cx));
         div()
             .id("pump-window")
             .track_focus(&self.editor_focus_handle)
@@ -6783,7 +6864,7 @@ impl Render for PumpEditor {
             })
             .when(right > 0 && !dock_right, |el| {
                 el.child(
-                    self.filter_panel(cx)
+                    self.filter_panel(spectrum, cx)
                         .absolute()
                         .right(px(0.))
                         .top(px(0.))

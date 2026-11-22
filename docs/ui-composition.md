@@ -8,7 +8,7 @@ The parameter deck groups Smooth and Swing under Shape and the Mix and Output kn
 
 The COMP button opens a panel on the left with a vertical threshold fader, a live gain-reduction meter, rotary controls and a dedicated sidechain section. Capture feedback appears next to Capture in the footer.
 
-The FILTER button opens a panel on the right with a frequency-response plot, crossover slope, LP/HP mix bars and Solo controls. The panels open independently and request additional width at the current window height. If the host keeps the current size, the panel opens over the editor and can be closed from its header.
+The FILTER button opens a panel on the right. The plot shows the live stereo input spectrum behind the crossover curves, with slope, LP/HP mix bars and Solo controls below. Each panel opens independently and adds 240 logical pixels at the current window height. If the host keeps the current size, the panel opens over the editor and can be closed from its header.
 
 The Frame composition is a visual reference; native control behavior belongs to Pump. Native macOS/Windows rendering requires validation on those platforms.
 

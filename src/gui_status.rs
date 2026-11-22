@@ -69,6 +69,7 @@ pub struct GuiStatus {
     phase_extrapolation_enabled: AtomicBool,
     last_update_micros: AtomicU64,
     incoming_waveform: crate::incoming_waveform::IncomingWaveformBuffer,
+    track_spectrum: crate::track_spectrum::SpectrumInput,
     sidechain_waveform: crate::incoming_waveform::IncomingWaveformBuffer,
     show_sidechain_waveform: AtomicBool,
     compressor_preview: crate::incoming_waveform::IncomingWaveformBuffer,
@@ -102,6 +103,7 @@ impl Default for GuiStatus {
             phase_extrapolation_enabled: AtomicBool::new(true),
             last_update_micros: AtomicU64::new(0),
             incoming_waveform: crate::incoming_waveform::IncomingWaveformBuffer::default(),
+            track_spectrum: Default::default(),
             sidechain_waveform: Default::default(),
             show_sidechain_waveform: AtomicBool::new(false),
             compressor_preview: crate::incoming_waveform::IncomingWaveformBuffer::new_live_trace(),
@@ -163,10 +165,15 @@ impl GuiStatus {
         crate::incoming_waveform::compressor_preview_snapshot(&self.compressor_preview)
     }
 
+    pub(crate) fn track_spectrum(&self) -> &crate::track_spectrum::SpectrumInput {
+        &self.track_spectrum
+    }
+
     pub(crate) fn mark_waveforms_unavailable(&self) {
         self.incoming_waveform.mark_unavailable();
         self.sidechain_waveform.mark_unavailable();
         self.compressor_preview.mark_unavailable();
+        self.track_spectrum.invalidate();
     }
 
     pub(crate) fn waveform_live_mode(&self) -> bool {

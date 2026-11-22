@@ -347,8 +347,8 @@ mod macos {
             .chunks_exact(width as usize * 4)
             .take(bottom_px)
             .skip(top_px)
-            .flat_map(|row| row[left_px * 4..right_px * 4].chunks_exact(4))
-            .filter(|pixel| color_matches(pixel))
+            .flat_map(|row| row[left_px * 4..right_px * 4].as_chunks::<4>().0.iter())
+            .filter(|&pixel| color_matches(pixel))
             .count()
     }
 
@@ -814,6 +814,20 @@ mod macos {
         assert_eq!(pump::gui_gpui::screenshot_bounds("curve-plot"), base_plot);
         let [frequency_x, _, _, _] = pump::gui_gpui::screenshot_bounds("frequency-plot");
         assert!(frequency_x >= OUTPUT_WIDTH as f32);
+
+        let spectrum_ink = |pixel: &[u8]| {
+            // The crossover fills lightly tint the gray spectrum behind them.
+            let [red, green, blue] = [pixel[0], pixel[1], pixel[2]];
+            (68..150).contains(&red) && red.abs_diff(green) <= 12 && red.abs_diff(blue) <= 12
+        };
+        let before = count_region_pixels(&gui, "frequency-plot", spectrum_ink);
+        pump::gui_gpui::seed_screenshot_track_spectrum(&status);
+        pump_appkit(app, &gui, 0.04);
+        let after = count_region_pixels(&gui, "frequency-plot", spectrum_ink);
+        assert!(
+            after > before + 75,
+            "the spectrum should add visible ink ({before} to {after})"
+        );
 
         // Both band bars activate DSP without a separate switch, and one Undo
         // restores the entire drag including its activation.

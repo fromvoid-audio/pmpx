@@ -40,6 +40,14 @@ impl<'a> PluginAudioProcessor<'a, PumpShared, PumpMainThread<'a>> for PumpAudioP
         Self::new(shared, audio_config)
     }
 
+    fn reset(&mut self) {
+        self.shared.status.track_spectrum().invalidate();
+    }
+
+    fn stop_processing(&mut self) {
+        self.shared.status.track_spectrum().invalidate();
+    }
+
     fn process(
         &mut self,
         process: Process,
@@ -353,6 +361,7 @@ impl PumpAudioProcessor<'_> {
                 &self.shared.status,
                 self.sidechain_present,
                 frames,
+                self.sample_rate as f32,
             )),
         );
         if let Some(telemetry) = telemetry {
@@ -702,6 +711,45 @@ mod tests {
             .incoming_waveform_snapshot()
             .expect("default processing should publish the input envelope");
         assert!(snapshot.iter().copied().fold(0.0_f32, f32::max) >= 0.75);
+    }
+
+    #[test]
+    fn track_spectrum_collects_across_clap_blocks_in_bypass() {
+        use crate::track_spectrum::{SpectrumAnalyzer, WINDOW_SAMPLES};
+
+        const FRAMES: usize = 128;
+        let shared = shared();
+        shared.params.set_bypass(1.0);
+        let mut processor = processor(&shared, FRAMES as u32);
+        let mut settings = dsp_settings_from_params(shared.params.as_ref());
+        let spectrum = shared.status.track_spectrum();
+        spectrum.set_enabled(true);
+        let mut left = [0.0; FRAMES];
+        let mut right = [0.0; FRAMES];
+
+        assert_no_alloc(|| {
+            for offset in (0..WINDOW_SAMPLES).step_by(FRAMES) {
+                for (index, (left, right)) in left.iter_mut().zip(&mut right).enumerate() {
+                    let phase = std::f32::consts::TAU * 80.0 * (offset + index) as f32
+                        / WINDOW_SAMPLES as f32;
+                    *left = 0.5 * phase.sin();
+                    *right = -*left;
+                }
+                processor.param_schedule.begin_block(FRAMES);
+                assert!(processor.process_stereo_pair(
+                    ChannelPair::InPlace(&mut left),
+                    ChannelPair::InPlace(&mut right),
+                    &mut settings,
+                    TransportState::default(),
+                ));
+            }
+        });
+        let mut analyzer = SpectrumAnalyzer::default();
+        let trace = analyzer.update(spectrum, 1_000_000).unwrap();
+        let peak = trace.into_iter().fold(0.0_f32, f32::max);
+        assert!(peak > 0.90 && peak < 0.94);
+        processor.stop_processing();
+        assert!(analyzer.update(spectrum, 1_010_000).is_none());
     }
 
     #[test]

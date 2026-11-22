@@ -155,7 +155,9 @@ mod macos {
         if name.contains("curve-segment-proximity") || name.contains("curve-segment-command-hover")
         {
             let blue = pixels
-                .chunks_exact(4)
+                .as_chunks::<4>()
+                .0
+                .iter()
                 .filter(|rgba| {
                     rgba[2] > 180
                         && rgba[2].saturating_sub(rgba[0]) > 70
@@ -382,6 +384,7 @@ mod macos {
             pump_appkit(app, &gui, 0.06);
             let expanded_width = fixture.sync_host_size();
             assert_eq!(expanded_width, 1120);
+            pump::gui_gpui::seed_screenshot_track_spectrum(&status);
             capture(
                 app,
                 &fixture,

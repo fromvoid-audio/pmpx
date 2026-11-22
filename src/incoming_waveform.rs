@@ -604,6 +604,7 @@ pub(crate) struct WaveformWriters {
     pub(crate) input: IncomingWaveformWriter,
     sidechain: IncomingWaveformWriter,
     compressor: IncomingWaveformWriter,
+    spectrum: crate::track_spectrum::SpectrumWriter,
     sidechain_active: bool,
     compressor_active: bool,
 }
@@ -614,6 +615,7 @@ impl WaveformWriters {
         status: &'a crate::GuiStatus,
         sidechain_present: bool,
         frame_count: usize,
+        sample_rate: f32,
     ) -> WaveformBlock<'a> {
         if frame_count != 0 {
             self.input.begin_block(status.incoming_waveform_buffer());
@@ -626,15 +628,24 @@ impl WaveformWriters {
             }
             self.sidechain_active = sidechain_present;
         }
+        let capture_spectrum = self
+            .spectrum
+            .begin_block(status.track_spectrum(), sample_rate);
         WaveformBlock {
             writers: self,
+            capture_spectrum,
             status,
             compressor_started: false,
         }
     }
 
     pub(crate) fn reset(&mut self) {
-        *self = Self::default();
+        self.input.reset();
+        self.sidechain.reset();
+        self.compressor.reset();
+        self.spectrum.reset();
+        self.sidechain_active = false;
+        self.compressor_active = false;
     }
 
     pub(crate) fn reconcile_cycle_mapping(
@@ -669,6 +680,7 @@ pub(crate) struct WaveformBlock<'a> {
     writers: &'a mut WaveformWriters,
     status: &'a crate::GuiStatus,
     compressor_started: bool,
+    capture_spectrum: bool,
 }
 
 impl WaveformBlock<'_> {
@@ -680,6 +692,11 @@ impl WaveformBlock<'_> {
         input: [f32; 2],
         sidechain: Option<[f32; 2]>,
     ) {
+        if self.capture_spectrum {
+            self.writers
+                .spectrum
+                .record(self.status.track_spectrum(), input);
+        }
         let record = |writer: &mut IncomingWaveformWriter, buffer, [left, right]: [f32; 2]| {
             writer.record_with_cycle_mapping_and_timing_mode(
                 buffer,

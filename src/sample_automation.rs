@@ -705,7 +705,7 @@ mod tests {
             &mut settings,
             &mut last_curve_revision,
             playing_transport(0.0),
-            Some(writers.begin_block(&status, false, 0)),
+            Some(writers.begin_block(&status, false, 0, 48_000.0)),
         );
 
         assert!((params.phase_offset() - 0.25).abs() < f32::EPSILON);
@@ -951,7 +951,7 @@ mod tests {
             &mut settings,
             &mut last_curve_revision,
             playing_transport(0.0),
-            Some(writers.begin_block(&status, false, original.len())),
+            Some(writers.begin_block(&status, false, original.len(), 1_000.0)),
         )
         .expect("non-empty block should return telemetry");
 

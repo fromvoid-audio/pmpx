@@ -57,6 +57,7 @@ mod plugin_metadata;
 mod plugin_processor;
 mod sample_automation;
 mod time_utils;
+mod track_spectrum;
 mod transport;
 #[cfg(feature = "vst3")]
 mod vst3;
